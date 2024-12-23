@@ -23,50 +23,62 @@ class VerificationQuery:
         """单步验证的核心逻辑，处理多个Lyapunov函数
         """
         # 获取网络的输入和输出
-        current_state = network.inputVars[0][0]  # 所有智能体的当前状态
+        current_state = network.inputVars[0][0]
+        next_state = network.inputVars[1][0]
         
         # 网络输出包含: [控制输出, V_1(x_t),...,V_{n-1}(x_t), x_{t+1}, V_1(x_{t+1}),...,V_{n-1}(x_{t+1})]
-        network_output = network.outputVars[0][0]
+        control_output = network.outputVars[0][0]
+        v_current = network.outputVars[1][0]
+        v_next = network.outputVars[2][0]
 
-        print(current_state)
-        print(network_output)
+        #print("current_state", current_state)
+        #print("next_state", next_state)
+        #print("control_output", control_output)
+        #print("v_current", v_current)
+        #print("v_next", v_next)
         
-        # 解析输出
-        control_output = network_output[:2*self.num_agents]  
-        v_current = network_output[2*self.num_agents:2*self.num_agents+self.num_lyap]  # 当前所有Lyapunov值
-        next_state = network_output[2*self.num_agents+self.num_lyap:2*self.num_agents+self.num_lyap+4*self.num_agents]  # 下一状态
-        v_next = network_output[-self.num_lyap:]  # 下一状态的所有Lyapunov值
-        
-        return current_state, control_output, next_state, v_current, v_next
+        return current_state, next_state, control_output, v_current, v_next
 
     def check_descent(self, input_bounds, epsilon=0.01):
         """验证所有Lyapunov函数是否满足下降条件"""
         network = self.network
+
+        useMILP = True
+        options = Marabou.createOptions(verbosity=0, solveWithMILP=useMILP, snc=False)
         
         # 获取所有变量
-        current_state, control_output, next_state, v_current, v_next = self.run_unroll(network)
-        
+        current_state, next_state, control_output, v_current, v_next = self.run_unroll(network)
+
         # 设置输入范围约束
-        for i, (lb, ub) in enumerate(input_bounds):
-            network.setLowerBound(current_state[i], lb)
-            network.setUpperBound(current_state[i], ub)
+        for agent in range(self.num_agents):
+            # Set bounds for spacing
+            network.setLowerBound(current_state[agent][0], input_bounds[agent * 2][0])
+            network.setUpperBound(current_state[agent][0], input_bounds[agent * 2][1])
+            network.setLowerBound(next_state[agent][0], input_bounds[agent * 2][0])
+            network.setUpperBound(next_state[agent][0], input_bounds[agent * 2][1])
+            
+            # Set bounds for velocity
+            network.setLowerBound(current_state[agent][1], input_bounds[agent * 2 + 1][0])
+            network.setUpperBound(current_state[agent][1], input_bounds[agent * 2 + 1][1])
+            network.setLowerBound(next_state[agent][1], input_bounds[agent * 2 + 1][0])
+            network.setUpperBound(next_state[agent][1], input_bounds[agent * 2 + 1][1])
             
         # 对每个Lyapunov函数添加下降条件
         for i in range(self.num_lyap):
-            descent_eq = MarabouUtils.Equation(MarabouCore.Equation.GT)
+            descent_eq = MarabouUtils.Equation(MarabouCore.Equation.GE)
             descent_eq.addAddend(1, v_current[i])
             descent_eq.addAddend(-1, v_next[i])
             descent_eq.setScalar(epsilon)
             network.addEquation(descent_eq)
         
         # 求解验证问题
-        vals, stats = network.solve()
+        exitCode, vals, stats = network.solve(options=options, verbose=True)
         
         if len(vals) > 0:
             return [-1]  # 找到反例
         return [1] * 4  # 验证通过
 
-def safe_descent_cond_check(PATH_TO_ONNX, x_star, prev_pos=4, limit_pos=5, vel_limit=0.5, num_agents=2):
+def safe_descent_cond_check(PATH_TO_ONNX, limit_pos=5, vel_limit=0.5, num_agents=2):
     """主验证函数，处理多智能体系统
     Args:
         PATH_TO_ONNX: 组合模型的路径
@@ -120,6 +132,6 @@ def safe_descent_cond_check(PATH_TO_ONNX, x_star, prev_pos=4, limit_pos=5, vel_l
 
 if __name__ == "__main__":
     x_star = [20, 15]  # 目标状态：spacing=0, velocity=0
-    vals, ranges, is_safe = safe_descent_cond_check("/home/zhoujy53/Desktop/String_Stability_Verification/combined/combined_0.onnx", x_star, num_agents=3)
+    vals, ranges, is_safe = safe_descent_cond_check("/home/zhoujy53/Desktop/String_Stability_Verification/combined/combined_0.onnx", num_agents=3)
     print(f"Verification result: {'Safe' if is_safe else 'Unsafe'}")
 
