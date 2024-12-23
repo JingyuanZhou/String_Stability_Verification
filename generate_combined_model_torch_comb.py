@@ -36,6 +36,7 @@ def combined_model(V_net, controllers, output_file, state_dims, cav_indices):
             x_stars = x_stars.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, num_vehicles, 2]
             
             # 只输出CAV的控制器输出
+            '''
             output_controllers = []
             for i in self.cav_indices:
                 state_i = x[:, i, :]  # 获取第i辆车的状态
@@ -46,6 +47,11 @@ def combined_model(V_net, controllers, output_file, state_dims, cav_indices):
                 control = self.controllers[i](state_i, x_star_i, u_star, u_bounds)
                 output_controllers.append(control)
             output_controllers = torch.cat(output_controllers, dim=-1)
+            '''
+            u_bounds = (torch.tensor(-5.0, device=x.device), 
+                          torch.tensor(5.0, device=x.device))
+            u_star = torch.zeros(1, device=x.device)
+            output_controllers = self.controllers(x, x_stars, u_star, u_bounds)
             
             output_V1 = self.V_net(x, x_stars)
             output_V2 = self.V_net(y, x_stars)
@@ -53,7 +59,7 @@ def combined_model(V_net, controllers, output_file, state_dims, cav_indices):
             return output_controllers, output_V1, output_V2
     
     # Create and export combined model
-    combined_network = CombinedNetwork(controllers, V_net, cav_indices, state_dims)
+    combined_network = CombinedNetwork(controllers[cav_indices[0]], V_net, cav_indices, state_dims)
     
     # 创建包含所有车辆状态的dummy输入
     dummy_input_x = torch.randn(1, len(state_dims), state_dims[0],requires_grad=True)  # [1, num_vehicles]

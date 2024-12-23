@@ -5,7 +5,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 from lightning.pytorch.callbacks import ModelCheckpoint
 
-class VectorLyapunovNetwork(nn.Module):
+class VectorLyapunovNetwork_with_slice(nn.Module):
     def __init__(self, state_dims, hidden_dim=30):
         """
         Initialize vector Lyapunov function for each subsystem
@@ -64,6 +64,45 @@ class VectorLyapunovNetwork(nn.Module):
             
         return torch.stack(V_values)
 
+class VectorLyapunovNetwork(nn.Module):
+    def __init__(self, state_dim, hidden_dim=30):
+        super().__init__()
+        self.num_vehicles = len(state_dim)
+        one_state_dim = state_dim[0]
+        self.all_state_dim = sum(state_dim)
+        self.network = nn.Sequential(
+            nn.Linear(self.all_state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, self.num_vehicles-1)
+        )
+
+        # Initialize R matrices for each subsystem (skip leading vehicle)
+        self.R_matrices = nn.ParameterList([
+            self._init_R_matrix(dim) for dim in state_dim[1:]
+        ])
+
+    def _init_R_matrix(self, dim):
+        """Initialize R matrix with SVD parameterization"""
+        U = torch.randn(dim, dim)
+        U, _ = torch.linalg.qr(U)  # Orthonormal U
+        V = torch.randn(dim, dim)
+        V, _ = torch.linalg.qr(V)  # Orthonormal V
+        sigma = torch.ones(dim)  # Initial Σ
+        r = nn.Parameter(torch.randn(dim))  # Learnable r parameters
+        
+        return nn.Parameter(U @ (torch.diag(sigma + r**2)) @ V.T)
+        
+    def forward(self, x, x_star):
+        """
+        Compute Lyapunov function value
+        """
+        x = x.reshape(-1, self.all_state_dim)
+        phi_V = self.network(x)
+        V = phi_V
+        return V
+
 class NetworkController(nn.Module):
     def __init__(self, state_dim, control_dim, hidden_dim=30):
         super().__init__()
@@ -74,12 +113,15 @@ class NetworkController(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, control_dim)
         )
+        self.state_dim = state_dim
         
     def forward(self, x, x_star, u_star, u_bounds):
         """
         Compute control input with clamping
         """
         u_min, u_max = u_bounds
+        x = x.reshape(-1, self.state_dim)
+        x_star = x_star.reshape(-1, self.state_dim)
         phi_pi = self.network(x)
         phi_pi_star = self.network(x_star)
         u = torch.clamp(phi_pi - phi_pi_star + u_star, u_min, u_max)
@@ -215,7 +257,7 @@ class StringStabilityTrainer(pl.LightningModule):
                        torch.tensor(5.0, device=states.device))
             
             if isinstance(controller, NetworkController):  # Check if it's a NetworkController
-                control = controller(state_i, x_star_i, u_star, u_bounds)
+                control = controller(states, x_stars, u_star, u_bounds)
                 controls.append(control)
             else:
                 controls.append(None)
@@ -226,8 +268,10 @@ class StringStabilityTrainer(pl.LightningModule):
         # Next Lyapunov values
         V_next = self.V_net(next_states, x_stars)
         
-        # Compute Lyapunov decrease conditions
+        # Compute Lyapunov decrease and larger or equal to zero conditions
         V_decreases = []
+        beta = 0.05
+        #V_diff = torch.sum(nn.ReLU(V_current - beta))
         for i in range(1, states.shape[1]):  # Skip leading vehicle
             decrease = V_next[i-1] - V_current[i-1]
             # Add interconnection terms based on connection matrix
@@ -427,7 +471,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     # Initialize networks
     V_net = VectorLyapunovNetwork(state_dims)
     controllers = nn.ModuleList([
-        NetworkController(state_dims[i], control_dims[i]) if i in cav_indices 
+        NetworkController(sum(state_dims), control_dims[i]) if i in cav_indices 
         else nn.Identity() for i in range(num_vehicles)
     ])
 

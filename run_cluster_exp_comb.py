@@ -45,7 +45,6 @@ cur_model_onnx_file = f"models/cert_{index}.onnx"
 
 # Initialize and save empty V_net as previous model
 prev_V_net = VectorLyapunovNetwork(state_dims)
-prev_pos_bound = 4
 
 # Train the model
 st_train_time = datetime.now()
