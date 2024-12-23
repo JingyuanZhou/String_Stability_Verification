@@ -124,7 +124,7 @@ class NetworkController(nn.Module):
         x_star = x_star.reshape(-1, self.state_dim)
         phi_pi = self.network(x)
         phi_pi_star = self.network(x_star)
-        u = torch.clamp(phi_pi - phi_pi_star + u_star, u_min, u_max)
+        u = phi_pi #torch.clamp(phi_pi, u_min, u_max) # - phi_pi_star + u_star
         return u
 
 class InterconnectedSystem:
