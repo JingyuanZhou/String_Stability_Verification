@@ -2,98 +2,108 @@ import torch
 import torch.nn as nn
 import torch.onnx
 
-from training_exp import LyapunovNetworkV, TwoDimDocking
 from attempt_conversion import LearnedController
 
-def combined_model(file_1,file_2,file_3, file_4): 
-    V = torch.load(file_1)
-    #V = V.to(device="cpu")
-
-    controller = torch.load(file_2)
-    #controller = controller.to(device="cpu")
-    prev_V = torch.load(file_3)
-    # Create the combined network with stacked A and two copies of B and one C
+def combined_model(V_net, controllers, output_file, state_dims, cav_indices): 
+    """
+    Combine V_net, controllers and previous model into a single ONNX model
+    
+    Args:
+        V_net: Vector Lyapunov network
+        controllers: ModuleList of controllers
+        prev_V_net: Previous Vector Lyapunov network
+        output_file: Path to save combined ONNX model
+        state_dims: List of state dimensions for each vehicle
+        cav_indices: List of CAV indices
+    """
     class CombinedNetwork(nn.Module):
-        def __init__(self, model_A, model_B, model_C):
+        def __init__(self, controllers, V_net, cav_indices, state_dims):
             super(CombinedNetwork, self).__init__()
-            self.model_A = model_A
-            self.model_B1 = model_B
-            self.model_B2 = model_B
-            self.model_C1 = model_C
-            self.model_C2 = model_C
-
+            self.controllers = controllers
+            self.V_net = V_net
+            self.cav_indices = cav_indices
+            self.state_dims = state_dims
+        
         def forward(self, x, y):
-            input_A = x
-            input_B1 = x
-            input_B2 = y
-            input_C1 = x
-            input_C2 = y
+            # x, y shape: [batch_size, num_vehicles * 2]
+            batch_size = x.shape[0]
+            num_vehicles = self.state_dims[1]
+            
+            # 创建期望状态向量 [batch_size, num_vehicles, 2]
+            x_stars = torch.tensor([[20.0, 15.0]] * num_vehicles, device=x.device)  # [num_vehicles, 2]
+            x_stars = x_stars.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, num_vehicles, 2]
+            
+            # 只输出CAV的控制器输出
+            output_controllers = []
+            for i in self.cav_indices:
+                state_i = x[:, i, :]  # 获取第i辆车的状态
+                x_star_i = x_stars[:, i, :]  # 获取第i辆车的期望状态
+                u_star = torch.zeros(1, device=x.device)
+                u_bounds = (torch.tensor(-5.0, device=x.device), 
+                          torch.tensor(5.0, device=x.device))
+                control = self.controllers[i](state_i, x_star_i, u_star, u_bounds)
+                output_controllers.append(control)
+            output_controllers = torch.cat(output_controllers, dim=-1)
+            
+            output_V1 = self.V_net(x, x_stars)
+            output_V2 = self.V_net(y, x_stars)
+            
+            return output_controllers, output_V1, output_V2
+    
+    # Create and export combined model
+    combined_network = CombinedNetwork(controllers, V_net, cav_indices, state_dims)
+    
+    # 创建包含所有车辆状态的dummy输入
+    dummy_input_x = torch.randn(1, state_dims[1], state_dims[0])  # [1, num_vehicles * 2]
+    dummy_input_y = torch.randn(1, state_dims[1], state_dims[0])  # [1, num_vehicles * 2]
+    
+    torch.onnx.export(
+        combined_network,
+        (dummy_input_x, dummy_input_y),
+        output_file,
+        input_names=['input_x', 'input_y'],
+        output_names=['controllers_out', 'V1_out', 'V2_out'],
+        dynamic_axes={'input_x': {0: 'batch_size'},
+                     'input_y': {0: 'batch_size'}}
+    )
 
-            output_A = self.model_A(input_A)
-            output_B1 = self.model_B1(input_B1)
-            output_B2 = self.model_B2(input_B2)
-            output_C1 = self.model_C1(input_C1)
-            output_C2 = self.model_C2(input_C2)
-
-            return output_A, output_B1, output_B2, output_C1, output_C2
-
-
-    # Create an instance of the combined network
-    combined_network = CombinedNetwork(controller,V,prev_V)
-
-    # Test the combined network
-    input_data_one = torch.randn(10, 4)  
-    input_data_two = torch.randn(10, 4)
-
-    input_data_one = torch.Tensor([[1,1,1,1]])
-    input_data_two =  torch.Tensor([[1,1,1,1]])
-
-    print(input_data_one)
-    print(input_data_two)
-    output_one, output_two, output_three, output_four, output_five = combined_network(input_data_one,input_data_two)
-    print(output_one)
-    print(output_two)
-    print(output_three)
-    print(output_four)
-    print(output_five)
-
-    x = torch.randn(1,4,requires_grad=True)
-    y = torch.randn(1,4,requires_grad=True)
-
-    torch.onnx.export(combined_network,(x,y),file_4,export_params=True,opset_version=10,do_constant_folding=True,input_names = ['input_1','input_2'],output_names = ['output_1','output_2','output_3','output_4','output_5'])
-
-def combine_prev_cur(file_1, file_2, file_3):
-    V = torch.load(file_1)
-    prev_V = torch.load(file_2)
+def combine_prev_cur(V_net, output_file, state_dims):
+    """
+    Combine current and previous V_net into a single ONNX model
+    
+    Args:
+        V_net: Current Vector Lyapunov network
+        prev_V_net: Previous Vector Lyapunov network
+        output_file: Path to save combined ONNX model
+        state_dims: List of state dimensions for each vehicle
+    """
     class CombinedNetwork(nn.Module):
-        def __init__(self, model_A, model_B):
+        def __init__(self, V_net, state_dims):
             super(CombinedNetwork, self).__init__()
-            self.model_A = model_A
-            self.model_B = model_B
+            self.V_net = V_net
+            self.state_dims = state_dims
 
         def forward(self, x):
-            input_A = x
-            input_B = x
+            batch_size = x.shape[0]
+            num_vehicles = self.state_dims[1]
+            x_stars = torch.tensor([[20.0, 15.0]] * num_vehicles, device=x.device)  # [num_vehicles, 2]
+            x_stars = x_stars.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, num_vehicles, 2]
+            
+            output_current = self.V_net(x, x_stars)
 
-            output_A = self.model_A(input_A)
-            output_B = self.model_B(input_B)
+            return output_current
 
-            return output_A, output_B
+    # Create and export combined model
+    combined_network = CombinedNetwork(V_net, state_dims)
+    
 
-
-    # Create an instance of the combined network
-    combined_network = CombinedNetwork(V,prev_V)
-
-    # Test the combined network
-    input_data_one = torch.randn(10, 4)  
-
-    input_data_one = torch.Tensor([[1,1,1,1]])
-
-    print(input_data_one)
-    output_one, output_two = combined_network(input_data_one)
-    print(output_one)
-    print(output_two)
-
-    x = torch.randn(1,4,requires_grad=True)
-
-    torch.onnx.export(combined_network,(x),file_3,export_params=True,opset_version=10,do_constant_folding=True,input_names = ['input_1'],output_names = ['output_1','output_2'])
+    dummy_input = torch.randn(1, state_dims[1], state_dims[0])  
+    
+    torch.onnx.export(
+        combined_network,
+        dummy_input,
+        output_file,
+        input_names=['input'],
+        output_names=['output_current'],
+        dynamic_axes={'input': {0: 'batch_size'}}
+    )

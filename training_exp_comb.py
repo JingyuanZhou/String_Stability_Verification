@@ -401,12 +401,72 @@ def create_platoon_connections(num_vehicles, cav_indices):
             
     return connections
 
+def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params, learning_rate, batch_size, num_epochs):
+    """
+    Train the platoon control system using PyTorch Lightning
+    
+    Args:
+        num_vehicles (int): Number of vehicles in platoon
+        cav_indices (list): Indices of CAVs in the platoon
+        state_dims (list): Dimensions of state space for each vehicle
+        control_dims (list): Dimensions of control input for each vehicle
+        dynamics_params (dict): Parameters for system dynamics
+        learning_rate (float): Learning rate for optimization
+        batch_size (int): Batch size for training
+        num_epochs (int): Number of training epochs
+    
+    Returns:
+        controllers (nn.ModuleList): Trained controllers
+        system (PlatoonDynamics): Initialized system dynamics
+    """
+    # Create connection matrix
+    connection_matrix = create_platoon_connections(num_vehicles, cav_indices)
 
+    # Initialize networks
+    V_net = VectorLyapunovNetwork(state_dims)
+    controllers = nn.ModuleList([
+        NetworkController(state_dims[i], control_dims[i]) if i in cav_indices 
+        else nn.Identity() for i in range(num_vehicles)
+    ])
+
+    # Initialize system dynamics
+    system = PlatoonDynamics(dynamics_params, connection_matrix)
+
+    # Initialize data module
+    data_module = PlatoonDataModule(num_vehicles, cav_indices, dynamics_params, 
+                                  batch_size=batch_size)
+
+    # Initialize trainer
+    trainer = StringStabilityTrainer(V_net, controllers, system, 
+                                   learning_rate=learning_rate)
+
+    checkpoint_callback = ModelCheckpoint(
+        monitor='val_loss',
+        dirpath='model_weights',
+        filename='best_model-{epoch:02d}-{val_loss:.2f}',
+        save_top_k=1,
+        mode='min',
+        save_last=True
+    )
+
+    # Train the system
+    pl_trainer = pl.Trainer(
+        max_epochs=num_epochs,
+        check_val_every_n_epoch=5,
+        callbacks=[checkpoint_callback],
+        enable_checkpointing=True
+    )
+    pl_trainer.fit(trainer, data_module)
+
+    return controllers, system, V_net
+
+def retrain_model():
+    pass
 
 if __name__ == "__main__":
     # System parameters
     num_vehicles = 3
-    cav_indices = [1]  # Second and fourth vehicles are CAVs
+    cav_indices = [1]  # Second vehicle is CAV
     state_dims = [2] * num_vehicles  # Each vehicle has 2 states (position, velocity)
     control_dims = [1] * num_vehicles  # Each vehicle has 1 control input (acceleration)
 
@@ -423,42 +483,25 @@ if __name__ == "__main__":
         'desired_spacing': 20.0
     }
 
-    # Create connection matrix
-    connection_matrix = create_platoon_connections(num_vehicles, cav_indices)
+    # Training parameters
+    learning_rate = 1e-3
+    batch_size = 32
+    num_epochs = 100
 
-    # Initialize networks
-    V_net = VectorLyapunovNetwork(state_dims)
-    controllers = nn.ModuleList([
-        NetworkController(state_dims[i], control_dims[i]) if i in cav_indices 
-        else nn.Identity() for i in range(num_vehicles)
-    ])
-
-    # Initialize system dynamics
-    system = PlatoonDynamics(dynamics_params, connection_matrix)
-
-    # Initialize data module
-    data_module = PlatoonDataModule(num_vehicles, cav_indices, dynamics_params)
-
-    # Initialize trainer
-    trainer = StringStabilityTrainer(V_net, controllers, system)
-
-    checkpoint_callback = ModelCheckpoint(
-        monitor='val_loss',
-        dirpath='model_weights',
-        filename='best_model-{epoch:02d}-{val_loss:.2f}',  # 添加更多信息到文件名
-        save_top_k=1,
-        mode='min',
-        save_last=True  # 同时保存最后一个检查点
+    # Train the model
+    controllers, system, V_net = train_model(
+        num_vehicles=num_vehicles,
+        cav_indices=cav_indices,
+        state_dims=state_dims,
+        control_dims=control_dims,
+        dynamics_params=dynamics_params,
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        num_epochs=num_epochs
     )
 
-    # Train the system
-    pl_trainer = pl.Trainer(
-        max_epochs=100, 
-        check_val_every_n_epoch=5, 
-        callbacks=[checkpoint_callback],
-        enable_checkpointing=True  # 确保启用检查点
-    )
-    pl_trainer.fit(trainer, data_module)
+
+    print("Training completed and model saved!")
 
         
 
