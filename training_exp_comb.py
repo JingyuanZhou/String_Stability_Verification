@@ -29,6 +29,8 @@ class VectorLyapunovNetwork(nn.Module):
             self._init_R_matrix(dim) for dim in state_dims[1:]
         ])
         
+        self.num_vehicles = len(state_dims)
+        
     def _init_R_matrix(self, dim):
         """Initialize R matrix with SVD parameterization"""
         U = torch.randn(dim, dim)
@@ -48,7 +50,7 @@ class VectorLyapunovNetwork(nn.Module):
         """
         V_values = []
         # Skip the leading vehicle (i starts from 1)
-        for i in range(1, states.shape[1]):
+        for i in range(1, self.num_vehicles): #states.shape[1]
             state = states[:,i,:]
             x_star = x_stars[:,i,:]
             net = self.lyapunov_nets[i-1]  # Adjust index since we skipped first vehicle

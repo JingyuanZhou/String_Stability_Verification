@@ -689,5 +689,5 @@ def safe_descent_cond_check(PATH_TO_ONNX, PATH_TO_CERT, PATH_TO_MODELS, prev_pos
     return [vals, val_ranges, failed_vals]
 
 if __name__ == "__main__":
-    safe_descent_cond_check("combined_0.onnx", limit_pos = 5, safe_pos = 4, docking_pos = 0.35, vel_limit = 0.5)
+    safe_descent_cond_check("combined/combined_0.onnx", limit_pos = 5, safe_pos = 4, docking_pos = 0.35, vel_limit = 0.5)
 

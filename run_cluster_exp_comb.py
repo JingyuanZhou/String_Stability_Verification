@@ -34,7 +34,7 @@ dynamics_params = {
 # Training parameters
 learning_rate = 1e-3
 batch_size = 32
-num_epochs = 1
+num_epochs = 10
 
 # File paths
 index = 0
@@ -65,8 +65,8 @@ print("Total training time for model index", str(index), ":", str(diff.seconds))
 
 # Convert and combine models
 combined_model(V_net, controllers, cur_comb_file, state_dims, cav_indices)
-combine_prev_cur(V_net, cur_models_file, state_dims)
-single_model(V_net, cur_model_onnx_file, state_dims)
+#combine_prev_cur(V_net, cur_models_file, state_dims)
+#single_model(V_net, cur_model_onnx_file, state_dims)
 
 
 '''

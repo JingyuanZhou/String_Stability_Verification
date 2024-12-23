@@ -20,14 +20,16 @@ def combined_model(V_net, controllers, output_file, state_dims, cav_indices):
         def __init__(self, controllers, V_net, cav_indices, state_dims):
             super(CombinedNetwork, self).__init__()
             self.controllers = controllers
+            print("controllers", controllers)
             self.V_net = V_net
             self.cav_indices = cav_indices
             self.state_dims = state_dims
+            self.batch_size = 1
         
         def forward(self, x, y):
             # x, y shape: [batch_size, num_vehicles * 2]
-            batch_size = x.shape[0]
-            num_vehicles = self.state_dims[1]
+            batch_size = 1#x.shape[0]
+            num_vehicles = len(self.state_dims)
             
             # 创建期望状态向量 [batch_size, num_vehicles, 2]
             x_stars = torch.tensor([[20.0, 15.0]] * num_vehicles, device=x.device)  # [num_vehicles, 2]
@@ -54,17 +56,23 @@ def combined_model(V_net, controllers, output_file, state_dims, cav_indices):
     combined_network = CombinedNetwork(controllers, V_net, cav_indices, state_dims)
     
     # 创建包含所有车辆状态的dummy输入
-    dummy_input_x = torch.randn(1, state_dims[1], state_dims[0])  # [1, num_vehicles * 2]
-    dummy_input_y = torch.randn(1, state_dims[1], state_dims[0])  # [1, num_vehicles * 2]
+    dummy_input_x = torch.randn(1, len(state_dims), state_dims[0],requires_grad=True)  # [1, num_vehicles]
+    dummy_input_y = torch.randn(1, len(state_dims), state_dims[0],requires_grad=True)  # [1, num_vehicles]
     
+    print("dummy_input_x", dummy_input_x)
+    print("dummy_input_y", dummy_input_y)
+    output1, output2, output3 = combined_network(dummy_input_x, dummy_input_y)
+    print("output1", output1)
+    print("output2", output2)
+    print("output3", output3)
+
     torch.onnx.export(
         combined_network,
         (dummy_input_x, dummy_input_y),
         output_file,
+        export_params=True,opset_version=10,do_constant_folding=True,
         input_names=['input_x', 'input_y'],
-        output_names=['controllers_out', 'V1_out', 'V2_out'],
-        dynamic_axes={'input_x': {0: 'batch_size'},
-                     'input_y': {0: 'batch_size'}}
+        output_names=['controllers_out', 'V1_out', 'V2_out']
     )
 
 def combine_prev_cur(V_net, output_file, state_dims):

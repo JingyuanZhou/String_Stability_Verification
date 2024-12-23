@@ -5,7 +5,7 @@ import numpy as np
 # import Marabou.maraboupy import Marabou
 # from Marabou.maraboupy import MarabouCore
 import sys
-sys.path.append("/barrett/scratch/udayanm/Marabou")
+sys.path.append("/home/zhoujy53/Desktop/Marabou")
 from maraboupy import Marabou
 from maraboupy import MarabouCore, MarabouUtils
 
@@ -120,6 +120,6 @@ def safe_descent_cond_check(PATH_TO_ONNX, x_star, prev_pos=4, limit_pos=5, vel_l
 
 if __name__ == "__main__":
     x_star = [20, 15]  # 目标状态：spacing=0, velocity=0
-    vals, ranges, is_safe = safe_descent_cond_check("combined/combined_0.onnx", x_star, num_agents=3)
+    vals, ranges, is_safe = safe_descent_cond_check("/home/zhoujy53/Desktop/String_Stability_Verification/combined/combined_0.onnx", x_star, num_agents=3)
     print(f"Verification result: {'Safe' if is_safe else 'Unsafe'}")
 
