@@ -404,6 +404,9 @@ class PlatoonDataModule(pl.LightningDataModule):
             x_stars[:, train_size:,:].transpose(0, 1),  # [val_size, num_vehicles, 2]
             disturbances[:, train_size:].transpose(0, 1)  # [val_size, num_vehicles]
         )
+
+        torch.save(self.train_data, "data/train_data.pt")
+        torch.save(self.val_data, "data/val_data.pt")
     
     def train_dataloader(self):
         return DataLoader(
@@ -506,8 +509,182 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
 
     return controllers, system, V_net
 
-def retrain_model():
-    pass
+class PlatoonDataModuleRetrain(pl.LightningDataModule):
+    def __init__(self, epoch, counterexamples, counterexample_ranges, 
+                 num_points=50000):
+        super().__init__()
+        self.num_points = num_points
+        self.counterexamples = counterexamples
+        self.counterexample_ranges = counterexample_ranges
+        self.in_train_file = "data/train_data.pt"
+        self.out_train_file = "data/train_data.pt"
+        self.out_val_file = "data/val_data.pt"
+        self.epoch = epoch
+        self.batch_size = 10000
+
+    def setup(self, stage=None):
+        # 加载原有训练数据
+        old_data = torch.load(self.in_train_file)
+        
+        # 添加反例数据
+        combined_data = torch.cat([old_data, self.counterexamples], dim=0)
+        
+        # 保存新的训练数据
+        torch.save(combined_data, self.out_train_file)
+        
+        # 创建数据集
+        self.train_dataset = TensorDataset(combined_data)
+        self.val_dataset = TensorDataset(torch.load(self.out_val_file))
+
+    def train_dataloader(self):
+        return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
+
+    def val_dataloader(self):
+        return DataLoader(self.val_dataset, batch_size=self.batch_size)
+
+class StringStabilityTrainerRetrain(pl.LightningModule):
+    def __init__(self, V_list, controller, datamodule, out_model_file, 
+                 out_controller_file, threshold, primal_learning_rate=1e-4):
+        super().__init__()
+        self.V_list = V_list  # n-1个Lyapunov函数的列表
+        self.controller = controller
+        self.datamodule = datamodule
+        self.out_model_file = out_model_file
+        self.out_controller_file = out_controller_file
+        self.threshold = threshold
+        self.primal_learning_rate = primal_learning_rate
+        
+        # 初始化损失记录列表
+        self.losses_train = []
+        self.losses_val = []
+        self.descent_losses_train = []
+        self.descent_acc_train = []
+        self.descent_losses_val = []
+        self.descent_acc_val = []
+        self.epoch = 0
+        self.init_val = 0
+
+    def training_step(self, batch, batch_idx, optimizer_idx):
+        x = batch[0]
+        
+        total_loss = 0
+        for i, V in enumerate(self.V_list):
+            # 计算当前状态的Lyapunov值
+            v_current = V(x)
+            
+            # 计算下一状态
+            next_state = self.controller.next_step(x)
+            
+            # 计算下一状态的Lyapunov值
+            v_next = V(next_state)
+            
+            # Lyapunov下降条件损失
+            descent_loss = torch.relu(v_next - v_current + 0.1)
+            total_loss += descent_loss.mean()
+        
+        # 记录训练损失
+        self.losses_train.append(total_loss)
+        self.descent_losses_train.append(descent_loss.mean())
+        self.descent_acc_train.append((descent_loss == 0).float().mean())
+        
+        return total_loss
+
+    def validation_step(self, batch, batch_idx):
+        x = batch[0]
+        
+        total_loss = 0
+        for i, V in enumerate(self.V_list):
+            v_current = V(x)
+            next_state = self.controller.next_step(x)
+            v_next = V(next_state)
+            descent_loss = torch.relu(v_next - v_current + 0.1)
+            total_loss += descent_loss.mean()
+        
+        self.losses_val.append(total_loss)
+        self.descent_losses_val.append(descent_loss.mean())
+        self.descent_acc_val.append((descent_loss == 0).float().mean())
+
+    def configure_optimizers(self):
+        # 合并所有Lyapunov函数和控制器的参数
+        all_params = []
+        for V in self.V_list:
+            all_params.extend(list(V.parameters()))
+        all_params.extend(list(self.controller.nn.parameters()))
+        
+        optimizer = torch.optim.Adam(all_params, lr=self.primal_learning_rate)
+        return optimizer
+
+def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params,
+                 counterexamples, counterexample_ranges, epoch,
+                 in_model, in_controller,
+                 learning_rate=1e-4, batch_size=128, num_epochs=10000):
+    """
+    Retrain the platoon control system using counterexamples
+    
+    Args:
+        num_vehicles (int): Number of vehicles in platoon
+        cav_indices (list): Indices of CAVs in the platoon
+        state_dims (list): Dimensions of state space for each vehicle
+        control_dims (list): Dimensions of control input for each vehicle
+        dynamics_params (dict): Parameters for system dynamics
+        counterexamples (tensor): Counterexamples found during verification
+        counterexample_ranges (tensor): Ranges for the counterexamples
+        epoch (int): Current training epoch
+        in_model: Input Lyapunov network (V_net)
+        in_controller: Input controller network
+        learning_rate (float): Learning rate for optimization
+        batch_size (int): Batch size for training
+        num_epochs (int): Number of training epochs
+    
+    Returns:
+        controllers (nn.ModuleList): Retrained controllers
+        system (PlatoonDynamics): System dynamics
+        V_net (VectorLyapunovNetwork): Retrained Lyapunov network
+    """
+    # Create connection matrix
+    connection_matrix = create_platoon_connections(num_vehicles, cav_indices)
+
+    # Use provided networks directly
+    V_net = in_model
+    controllers = in_controller
+
+    # Initialize system dynamics
+    system = PlatoonDynamics(dynamics_params, connection_matrix)
+
+    # Initialize data module with counterexamples
+    data_module = PlatoonDataModuleRetrain(
+        num_vehicles, cav_indices, dynamics_params,
+        counterexamples, counterexample_ranges,
+        batch_size=batch_size
+    )
+
+    # Initialize trainer for retraining
+    trainer = StringStabilityTrainerRetrain(
+        V_net, controllers, system,
+        learning_rate=learning_rate
+    )
+
+    # Setup checkpointing
+    checkpoint_callback = ModelCheckpoint(
+        monitor='val_loss',
+        dirpath='model_weights',
+        filename=f'retrained_model-{epoch}-' + '{epoch:02d}-{val_loss:.2f}',
+        save_top_k=1,
+        mode='min',
+        save_last=True
+    )
+
+    # Train the system
+    pl_trainer = pl.Trainer(
+        max_epochs=num_epochs,
+        callbacks=[checkpoint_callback],
+        enable_checkpointing=True
+    )
+    
+    pl_trainer.fit(trainer, data_module)
+
+    return controllers, system, V_net
+
 
 if __name__ == "__main__":
     # System parameters
@@ -548,6 +725,8 @@ if __name__ == "__main__":
 
 
     print("Training completed and model saved!")
+
+    
 
         
 

@@ -1,4 +1,4 @@
-from training_exp_comb import train_model, VectorLyapunovNetwork
+from training_exp_comb import train_model, VectorLyapunovNetwork, retrain_model
 import torch
 import os
 from datetime import datetime
@@ -75,27 +75,29 @@ end_ver_time = datetime.now()
 diff_ver_time = end_ver_time - st_ver_time
 print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds))
 
-'''
+
 while (len(ret) > 0):
     index += 1
 
     st_train_time = datetime.now()
-    retrain_model(torch.Tensor(ret), torch.Tensor(ret_ranges), 4.1, 5, 0.5, cur_train_file, next_train_file, next_val_file, cur_model_file, cur_controller_file, next_model_file, next_controller_file, threshold, prev_model_file, prev_pos_bound)
+    controllers, system, V_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 
+                                               control_dims=control_dims, dynamics_params=dynamics_params, counterexamples=torch.Tensor(ret), 
+                                               counterexample_ranges=torch.Tensor(ret_ranges), epoch=num_epochs, in_model= V_net, 
+                                               in_controller = controllers)
     end_train_time = datetime.now()
     diff = end_train_time - st_train_time
     print("Total training time for model index", str(index), ":", str(diff.seconds))
 
-    combined_model(next_model_file, next_controller_file, next_comb_file)
-    combine_prev_cur(next_model_file, prev_model_file, next_models_file)
-    single_model(next_model_file, next_model_onnx_file)
+    combined_model(V_net, controllers, cur_comb_file, state_dims, cav_indices)
 
     st_ver_time = datetime.now()
-    ret, ret_ranges, failed = safe_descent_cond_check(next_comb_file, next_model_onnx_file, next_models_file, prev_pos = prev_pos_bound, safe_pos = 4.1, limit_pos = 5, docking_pos = 0.35, vel_limit = 0.5)
+    ret, ret_ranges, failed = safe_descent_cond_check(
+        cur_comb_file, 
+        num_agents= 3
+    )
     end_ver_time = datetime.now()
     diff_ver_time = end_ver_time - st_ver_time
     print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds) + "\n")
-    cur_train_file, cur_val_file, cur_model_file, cur_model_onnx_file, cur_controller_file, cur_models_file = next_train_file, next_val_file, next_model_file, next_controller_file, next_models_file
 
 print(failed)
 
-'''
