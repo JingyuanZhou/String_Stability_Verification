@@ -64,10 +64,6 @@ print("Total training time for model index", str(index), ":", str(diff.seconds))
 
 # Convert and combine models
 combined_model(V_net, controllers, cur_comb_file, state_dims, cav_indices)
-#combine_prev_cur(V_net, cur_models_file, state_dims)
-#single_model(V_net, cur_model_onnx_file, state_dims)
-
-
 
 # Verification
 st_ver_time = datetime.now()
@@ -80,7 +76,6 @@ diff_ver_time = end_ver_time - st_ver_time
 print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds))
 
 '''
-
 while (len(ret) > 0):
     index += 1
 
