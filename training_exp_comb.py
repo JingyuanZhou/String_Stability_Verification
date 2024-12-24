@@ -510,7 +510,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     return controllers, system, V_net
 
 class PlatoonDataModuleRetrain(pl.LightningDataModule):
-    def __init__(self, epoch, counterexamples, counterexample_ranges, 
+    def __init__(self, epoch, counterexamples, counterexample_ranges, batch_size=32, 
                  num_points=50000):
         super().__init__()
         self.num_points = num_points
@@ -520,11 +520,13 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         self.out_train_file = "data/train_data.pt"
         self.out_val_file = "data/val_data.pt"
         self.epoch = epoch
-        self.batch_size = 10000
+        self.batch_size = batch_size
 
     def setup(self, stage=None):
         # 加载原有训练数据
-        old_data = torch.load(self.in_train_file)
+        old_data = torch.load(self.in_train_file)[0]
+        print(old_data.shape)
+        print(self.counterexamples.shape)
         
         # 添加反例数据
         combined_data = torch.cat([old_data, self.counterexamples], dim=0)
@@ -534,7 +536,7 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         
         # 创建数据集
         self.train_dataset = TensorDataset(combined_data)
-        self.val_dataset = TensorDataset(torch.load(self.out_val_file))
+        self.val_dataset = TensorDataset(torch.load(self.out_val_file)[0])
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
@@ -543,15 +545,10 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         return DataLoader(self.val_dataset, batch_size=self.batch_size)
 
 class StringStabilityTrainerRetrain(pl.LightningModule):
-    def __init__(self, V_list, controller, datamodule, out_model_file, 
-                 out_controller_file, threshold, primal_learning_rate=1e-4):
+    def __init__(self, V_list, controller, primal_learning_rate=1e-4):
         super().__init__()
         self.V_list = V_list  # n-1个Lyapunov函数的列表
         self.controller = controller
-        self.datamodule = datamodule
-        self.out_model_file = out_model_file
-        self.out_controller_file = out_controller_file
-        self.threshold = threshold
         self.primal_learning_rate = primal_learning_rate
         
         # 初始化损失记录列表
@@ -605,13 +602,18 @@ class StringStabilityTrainerRetrain(pl.LightningModule):
         self.descent_acc_val.append((descent_loss == 0).float().mean())
 
     def configure_optimizers(self):
-        # 合并所有Lyapunov函数和控制器的参数
-        all_params = []
-        for V in self.V_list:
-            all_params.extend(list(V.parameters()))
-        all_params.extend(list(self.controller.nn.parameters()))
+        # Collect parameters from both controllers and V_net
+        parameters = []
         
-        optimizer = torch.optim.Adam(all_params, lr=self.primal_learning_rate)
+        # Add V_net parameters
+        parameters.extend(self.V_list.parameters())
+        
+        # Add controller parameters using index
+        for i in range(len(self.controller)):
+            if self.controller[i] is not None and hasattr(self.controller[i], 'parameters'):
+                parameters.extend(self.controller[i].parameters())
+        
+        optimizer = torch.optim.Adam(parameters, lr=self.primal_learning_rate)
         return optimizer
 
 def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params,
@@ -653,16 +655,17 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_
 
     # Initialize data module with counterexamples
     data_module = PlatoonDataModuleRetrain(
-        num_vehicles, cav_indices, dynamics_params,
-        counterexamples, counterexample_ranges,
+        epoch, counterexamples, counterexample_ranges,
         batch_size=batch_size
     )
 
     # Initialize trainer for retraining
-    trainer = StringStabilityTrainerRetrain(
-        V_net, controllers, system,
-        learning_rate=learning_rate
-    )
+    trainer = StringStabilityTrainer(V_net, controllers, system, 
+                                learning_rate=learning_rate)
+    #trainer = StringStabilityTrainerRetrain(
+    #    V_net, controllers,
+    #    primal_learning_rate=learning_rate
+    #)
 
     # Setup checkpointing
     checkpoint_callback = ModelCheckpoint(

@@ -74,11 +74,15 @@ class VerificationQuery:
         # 求解验证问题
         exitCode, vals, stats = network.solve(options=options, verbose=True)
         
-        if len(vals) > 0:
-            return [-1]  # 找到反例
-        return [1] * 4  # 验证通过
-
-def safe_descent_cond_check(PATH_TO_ONNX, limit_pos=5, vel_limit=0.5, num_agents=2):
+        if exitCode == "sat":
+            return [[vals[current_state[i][j]] for j in range(2)] for i in range(self.num_agents)]
+        if exitCode == "unsat":
+            return [1]
+        else:
+            return [-1]
+    
+        
+def safe_descent_cond_check(PATH_TO_ONNX, limit_pos=40, vel_limit=30, num_agents=3):
     """主验证函数，处理多智能体系统
     Args:
         PATH_TO_ONNX: 组合模型的路径
@@ -93,8 +97,8 @@ def safe_descent_cond_check(PATH_TO_ONNX, limit_pos=5, vel_limit=0.5, num_agents
     query = VerificationQuery(network, num_agents)
     
     # 定义空间划分（一维）
-    spacing_space = np.linspace(-limit_pos, limit_pos, 5)
-    velocity_space = np.linspace(-vel_limit, vel_limit, 5)
+    spacing_space = np.linspace(0, limit_pos, 5)
+    velocity_space = np.linspace(0, vel_limit, 5)
     
     # 验证结果存储
     vals = []
@@ -122,13 +126,13 @@ def safe_descent_cond_check(PATH_TO_ONNX, limit_pos=5, vel_limit=0.5, num_agents
                         ])
                 
                 ans = query.check_descent(state_bounds)
-                if len(ans) == 4:
+                if len(ans) > 1:
                     vals.append(ans)
                     val_ranges.append(state_bounds)
                 elif ans[0] == -1:
                     failed_vals.append(ans)
     
-    return vals, val_ranges, len(failed_vals) == 1
+    return vals, val_ranges, len(failed_vals) == 5*5*num_agents
 
 if __name__ == "__main__":
     x_star = [20, 15]  # 目标状态：spacing=0, velocity=0
