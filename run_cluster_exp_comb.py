@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from convertsinglenetwork import single_model
 from generate_combined_model_torch_comb import combined_model, combine_prev_cur
-# from queries_comb import safe_descent_cond_check
+from queries_comb import safe_descent_cond_check
 
 # Create output directories
 out_folders = ["controllers/", "models/", "data/", "combined/", "counterexamples/", "model_weights/"]
@@ -68,22 +68,18 @@ combined_model(V_net, controllers, cur_comb_file, state_dims, cav_indices)
 #single_model(V_net, cur_model_onnx_file, state_dims)
 
 
-'''
+
 # Verification
 st_ver_time = datetime.now()
 ret, ret_ranges, failed = safe_descent_cond_check(
     cur_comb_file, 
-    cur_model_onnx_file, 
-    cur_models_file, 
-    prev_pos=prev_pos_bound, 
-    safe_pos=4.1, 
-    limit_pos=5, 
-    docking_pos=0.35, 
-    vel_limit=0.5
+    num_agents= 3
 )
 end_ver_time = datetime.now()
 diff_ver_time = end_ver_time - st_ver_time
 print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds))
+
+'''
 
 while (len(ret) > 0):
     index += 1
@@ -106,4 +102,5 @@ while (len(ret) > 0):
     cur_train_file, cur_val_file, cur_model_file, cur_model_onnx_file, cur_controller_file, cur_models_file = next_train_file, next_val_file, next_model_file, next_controller_file, next_models_file
 
 print(failed)
+
 '''

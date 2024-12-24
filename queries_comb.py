@@ -128,10 +128,10 @@ def safe_descent_cond_check(PATH_TO_ONNX, limit_pos=5, vel_limit=0.5, num_agents
                 elif ans[0] == -1:
                     failed_vals.append(ans)
     
-    return vals, val_ranges, len(failed_vals) == 0
+    return vals, val_ranges, len(failed_vals) == 1
 
 if __name__ == "__main__":
     x_star = [20, 15]  # 目标状态：spacing=0, velocity=0
-    vals, ranges, is_safe = safe_descent_cond_check("/home/zhoujy53/Desktop/String_Stability_Verification/combined/combined_0.onnx", num_agents=3)
-    print(f"Verification result: {'Safe' if is_safe else 'Unsafe'}")
+    vals, ranges, failed = safe_descent_cond_check("/home/zhoujy53/Desktop/String_Stability_Verification/combined/combined_0.onnx", num_agents=3)
+    print(f"Verification result: {'fail' if failed else 'succeed'}")
 
