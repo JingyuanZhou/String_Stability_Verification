@@ -305,6 +305,7 @@ class StringStabilityTrainer(pl.LightningModule):
         return loss
 
     def validation_step(self, batch, batch_idx):
+        
         states, x_stars, disturbances = batch
         V_decreases = self.vector_lyapunov_conditions(states, x_stars, disturbances)
         val_loss = torch.relu(V_decreases + 1e-4).mean()
@@ -524,19 +525,26 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
 
     def setup(self, stage=None):
         # 加载原有训练数据
-        old_data = torch.load(self.in_train_file)[0]
-        print(old_data.shape)
+        old_data_states = torch.load(self.in_train_file)[0]
+        old_data_x_stars = torch.load(self.in_train_file)[1]
+        old_data_disturbances = torch.load(self.in_train_file)[2]
+
         print(self.counterexamples.shape)
+        # generate new x_stars for counterexamples, which is of same size as counterexamples
+        new_x_stars = torch.zeros_like(self.counterexamples)
+        new_x_stars[..., 0] = 15.0
+        new_x_stars[..., 1] = 20.0
         
         # 添加反例数据
-        combined_data = torch.cat([old_data, self.counterexamples], dim=0)
+        combined_data_states = torch.cat([old_data_states, self.counterexamples], dim=0)
+        combined_data_x_stars = torch.cat([old_data_x_stars, ], dim=0)
         
         # 保存新的训练数据
         torch.save(combined_data, self.out_train_file)
         
         # 创建数据集
         self.train_dataset = TensorDataset(combined_data)
-        self.val_dataset = TensorDataset(torch.load(self.out_val_file)[0])
+        self.val_dataset = TensorDataset(*torch.load(self.out_val_file))
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
