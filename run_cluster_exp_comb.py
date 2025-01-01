@@ -34,7 +34,9 @@ dynamics_params = {
 # Training parameters
 learning_rate = 1e-3
 batch_size = 32
-num_epochs = 1
+num_epochs = 3
+
+max_iters = 10000
 
 # File paths
 index = 0
@@ -68,7 +70,8 @@ combined_model(V_net, controllers, cur_comb_file, state_dims, cav_indices)
 # Verification
 st_ver_time = datetime.now()
 ret, ret_ranges, failed = safe_descent_cond_check(
-    cur_comb_file, 
+    cur_comb_file,
+    system=system, 
     num_agents= 3
 )
 end_ver_time = datetime.now()
@@ -76,7 +79,7 @@ diff_ver_time = end_ver_time - st_ver_time
 print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds))
 
 
-while (len(ret) > 0):
+while (len(ret) > 0) and (index < max_iters):
     index += 1
 
     st_train_time = datetime.now()
@@ -93,6 +96,7 @@ while (len(ret) > 0):
     st_ver_time = datetime.now()
     ret, ret_ranges, failed = safe_descent_cond_check(
         cur_comb_file, 
+        system=system,
         num_agents= 3
     )
     end_ver_time = datetime.now()

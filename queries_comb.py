@@ -14,10 +14,11 @@ from convertsinglenetwork import single_model
 
 # from maraboupy import MarabouCore
 class VerificationQuery:
-    def __init__(self, network, num_agents=2):
+    def __init__(self, network, system, num_agents=2):
         self.network = network
         self.num_agents = num_agents
         self.num_lyap = num_agents - 1
+        self.system = system
         
     def run_unroll(self, network):
         """单步验证的核心逻辑，处理多个Lyapunov函数
@@ -51,6 +52,7 @@ class VerificationQuery:
 
         # 设置输入范围约束
         for agent in range(self.num_agents):
+
             # Set bounds for spacing
             network.setLowerBound(current_state[agent][0], input_bounds[agent * 2][0])
             network.setUpperBound(current_state[agent][0], input_bounds[agent * 2][1])
@@ -65,9 +67,13 @@ class VerificationQuery:
             
         # 对每个Lyapunov函数添加下降条件
         for i in range(self.num_lyap):
-            descent_eq = MarabouUtils.Equation(MarabouCore.Equation.GE)
-            descent_eq.addAddend(1, v_current[i])
-            descent_eq.addAddend(-1, v_next[i])
+            aii = 0.6
+            descent_eq = MarabouUtils.Equation(MarabouCore.Equation.LE)
+            descent_eq.addAddend(1, v_next[i])
+            descent_eq.addAddend(-1, v_current[i])
+            descent_eq.addAddend(aii, v_current[i])
+            for j in self.system.connections[i+1]:
+                descent_eq.addAddend(self.system.connections[i+1][j], v_current[j-1])
             descent_eq.setScalar(epsilon)
             network.addEquation(descent_eq)
         
@@ -82,7 +88,7 @@ class VerificationQuery:
             return [-1]
     
         
-def safe_descent_cond_check(PATH_TO_ONNX, limit_pos=40, vel_limit=30, num_agents=3):
+def safe_descent_cond_check(PATH_TO_ONNX, system, limit_pos=40, vel_limit=30, num_agents=3):
     """主验证函数，处理多智能体系统
     Args:
         PATH_TO_ONNX: 组合模型的路径
@@ -94,11 +100,15 @@ def safe_descent_cond_check(PATH_TO_ONNX, limit_pos=40, vel_limit=30, num_agents
     """
     # 加载组合后的ONNX模型
     network = Marabou.read_onnx(PATH_TO_ONNX)
-    query = VerificationQuery(network, num_agents)
+    query = VerificationQuery(network, system, num_agents)
     
     # 定义空间划分（一维）
     spacing_space = np.linspace(0, limit_pos, 5)
     velocity_space = np.linspace(0, vel_limit, 5)
+
+    dist_range = (-0.5,0.5)
+    dist_space = np.linspace(dist_range[0], dist_range[1], 5)
+
     
     # 验证结果存储
     vals = []

@@ -271,14 +271,16 @@ class StringStabilityTrainer(pl.LightningModule):
         # Compute Lyapunov decrease and larger or equal to zero conditions
         V_decreases = []
         beta = 0.05
+        a_ii = 0.3
         #V_diff = torch.sum(nn.ReLU(V_current - beta))
         for i in range(1, states.shape[1]):  # Skip leading vehicle
             decrease = V_next[i-1] - V_current[i-1]
             # Add interconnection terms based on connection matrix
+            decrease += 0.6 * V_current[i-1]
             for j in self.system.connections[i]:
-                decrease += self.system.connections[i][j] * V_current[j-1]
+                decrease -= self.system.connections[i][j] * V_current[j-1]
             # Add disturbance term
-            decrease += torch.norm(disturbances[i])**2
+            decrease -= torch.norm(disturbances[i])**2
             V_decreases.append(decrease)
             
         return torch.stack(V_decreases)
@@ -529,21 +531,25 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         old_data_x_stars = torch.load(self.in_train_file)[1]
         old_data_disturbances = torch.load(self.in_train_file)[2]
 
-        print(self.counterexamples.shape)
         # generate new x_stars for counterexamples, which is of same size as counterexamples
         new_x_stars = torch.zeros_like(self.counterexamples)
         new_x_stars[..., 0] = 15.0
         new_x_stars[..., 1] = 20.0
-        
+
+        new_data_disturbances = torch.zeros_like(self.counterexamples[:,0,:].squeeze())
+
         # 添加反例数据
         combined_data_states = torch.cat([old_data_states, self.counterexamples], dim=0)
-        combined_data_x_stars = torch.cat([old_data_x_stars, ], dim=0)
+        combined_data_x_stars = torch.cat([old_data_x_stars, new_x_stars], dim=0)
+        combined_data_disturbances = torch.cat([old_data_disturbances, new_data_disturbances], dim=0)
+
+        combined_data = (combined_data_states, combined_data_x_stars, combined_data_disturbances)
         
         # 保存新的训练数据
         torch.save(combined_data, self.out_train_file)
         
         # 创建数据集
-        self.train_dataset = TensorDataset(combined_data)
+        self.train_dataset = TensorDataset(*combined_data)
         self.val_dataset = TensorDataset(*torch.load(self.out_val_file))
 
     def train_dataloader(self):
@@ -627,7 +633,7 @@ class StringStabilityTrainerRetrain(pl.LightningModule):
 def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params,
                  counterexamples, counterexample_ranges, epoch,
                  in_model, in_controller,
-                 learning_rate=1e-4, batch_size=128, num_epochs=10000):
+                 learning_rate=1e-4, batch_size=32):
     """
     Retrain the platoon control system using counterexamples
     
@@ -687,7 +693,7 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_
 
     # Train the system
     pl_trainer = pl.Trainer(
-        max_epochs=num_epochs,
+        max_epochs=epoch,
         callbacks=[checkpoint_callback],
         enable_checkpointing=True
     )
