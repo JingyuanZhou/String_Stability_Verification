@@ -58,7 +58,7 @@ controllers, system, V_net = train_model(
     num_epochs=num_epochs,
     system_dynamics_network=system_dynamics_network,
     train_system=False,
-    index=index
+    index=index,
     pre_trained_model=pre_trained_model
 )
 end_train_time = datetime.now()
