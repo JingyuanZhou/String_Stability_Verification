@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from training_exp_comb import PlatoonDynamics, NetworkController
+from training_exp_comb import PlatoonDynamics, NetworkController, VectorLyapunovNetwork, system_network
 import torch.nn as nn
 
 # 初始化系统参数
@@ -14,8 +14,8 @@ dynamics_params = {
     'v_max': 30.0,
     's_st': 5.0,
     's_go': 35.0,
-    'a_max': 5.0,
-    'a_min': -5.0,
+    'a_max': 7.0,
+    'a_min': -7.0,
     'desired_spacing': 20.0
 }
 
@@ -28,10 +28,11 @@ for i in range(1, num_vehicles):
         connection_matrix[i][i-1] = 1.0
 
 # 初始化系统动力学
-system = PlatoonDynamics(dynamics_params, connection_matrix)
+system_dynamics_network = system_network(state_dim=3)
+system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/last.ckpt')
+check_point = torch.load(f'model_weights/best_model-v22.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
 controller_parameters = {}
@@ -42,11 +43,12 @@ for k, v in parameters.items():
         controller_parameters[new_key] = v
 
 controllers = nn.ModuleList([
-    NetworkController(2, 1) if i in cav_indices  # state_dim=2, control_dim=1
+    NetworkController(6, 1) if i in cav_indices  # state_dim=2, control_dim=1
     else nn.Identity() for i in range(num_vehicles)
 ])
 
-
+#print("controller_parameters", controller_parameters)
+#print("controllers", controllers)
 controllers.load_state_dict(controller_parameters)
 controllers.eval()
 
@@ -61,7 +63,7 @@ for i in range(1, num_vehicles):
     states[:, i, 1] = 15.0  # 初始速度
 
 # 存储轨迹
-time_steps = 1000
+time_steps = 500
 trajectories = [states.clone()]
 disturbances = torch.zeros((batch_size, num_vehicles))
 
@@ -76,11 +78,11 @@ with torch.no_grad():
         for i in range(num_vehicles):
             if i in cav_indices:
                 state_i = states[:, i, :]
-                x_star = torch.tensor([20.0, 15.0])  # 期望状态
+                x_star = torch.tensor([20.0, 15.0]*3)  # 期望状态
                 u_star = torch.zeros(1)
                 u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
-                control = controllers[i](state_i, x_star, u_star, u_bounds)
-                controls.append(control)
+                control = controllers[i](states, x_star, u_star, u_bounds)
+                controls.append(control)#
             else:
                 controls.append(None)
         
@@ -114,7 +116,60 @@ for i in range(num_vehicles):
     plt.legend()
 
 plt.tight_layout()
+
+# visualize lyapunov functions
+spacing_space = np.linspace(0, 40, 100)
+velocity_space = np.linspace(0, 30, 100)
+V = np.zeros((len(spacing_space), len(velocity_space)))
+
+state_dims = [2] * num_vehicles
+V_net = VectorLyapunovNetwork(state_dim=state_dims)
+V_parameters = {}
+for k, v in parameters.items():
+    if k.startswith('V_net.'):
+        new_key = k.replace('V_net.', '')
+        V_parameters[new_key] = v
+print(V_parameters.keys())
+print(V_net)
+V_net.load_state_dict(V_parameters)
+
+for i, s in enumerate(spacing_space):
+    for j, v in enumerate(velocity_space):
+        x = torch.tensor([[20.0, 15.0,s, v,20.0, 15.0]],dtype=torch.float32)
+        x_star = torch.tensor([[20.0, 15.0]*3],dtype=torch.float32)
+        V[i, j] = V_net(x, x_star)[0][0].item()
+
+# Create a meshgrid: X corresponds to spacing, Y corresponds to velocity
+X, Y = np.meshgrid(spacing_space, velocity_space)
+
+# Since you used V.T in contourf, Z would be V.T to match X, Y shapes
+Z = V.T
+
+fig = plt.figure(figsize=(8, 6))
+ax = fig.add_subplot(111, projection='3d')
+
+# Create the surface plot
+surf = ax.plot_surface(X, Y, Z, cmap='viridis')
+
+# If you want to mark the equilibrium point in 3D,
+# you need the corresponding Z-value at (x=20, y=15).
+# We'll assume you have it, for example:
+# equilibrium_z = ...  # e.g., Z at that coordinate
+# For demonstration, let's just pick the nearest index or a known value:
+equilibrium_z = 0.0  # Replace with the actual value from V
+
+ax.scatter(20, 15, equilibrium_z, color='r', marker='x', s=50, label='equilibrium')
+
+# Label axes
+ax.set_xlabel('Spacing (m)')
+ax.set_ylabel('Velocity (m/s)')
+ax.set_zlabel('Lyapunov Function')
+
+# Add a colorbar
+fig.colorbar(surf, ax=ax, shrink=0.5, aspect=10)
+
+plt.title('Lyapunov Function - Surface Plot')
+plt.legend()
 plt.show()
 
-
-
+        

@@ -4,7 +4,7 @@ import torch.onnx
 
 from attempt_conversion import LearnedController
 
-def combined_model(V_net, controllers, output_file, state_dims, cav_indices): 
+def combined_model(V_net, controllers, system_dynamics, output_file, state_dims, cav_indices): 
     """
     Combine V_net, controllers and previous model into a single ONNX model
     
@@ -17,16 +17,45 @@ def combined_model(V_net, controllers, output_file, state_dims, cav_indices):
         cav_indices: List of CAV indices
     """
     class CombinedNetwork(nn.Module):
-        def __init__(self, controllers, V_net, cav_indices, state_dims):
+        def __init__(self, controllers, V_net, cav_indices, state_dims, system_dynamics):
             super(CombinedNetwork, self).__init__()
             self.controllers = controllers
-            print("controllers", controllers)
-            self.V_net = V_net
+            self.controllers_temp = controllers
+            self.V_net_1 = V_net
+            self.V_net_2 = V_net
+            self.system_dynamics = system_dynamics
             self.cav_indices = cav_indices
             self.state_dims = state_dims
             self.batch_size = 1
-        
-        def forward(self, x, y):
+            W_state_with_preceding = torch.zeros(6, 3)
+            W_state_with_preceding[3:6, torch.arange(3)] = 1.0
+            self.register_buffer('W_state_with_preceding', W_state_with_preceding)
+
+            '''
+            W_leading_vehicle = torch.zeros(6, 2)
+            W_CAV = torch.zeros(6, 2)
+            W_HDV = torch.zeros(6, 2)
+
+            W_leading_vehicle[0:2, torch.arange(2)] = 1.0
+            W_CAV[2:4, torch.arange(2)] = 1.0
+            W_HDV[4:6, torch.arange(2)] = 1.0
+
+            self.register_buffer('W_leading_vehicle', W_leading_vehicle)
+            self.register_buffer('W_CAV', W_CAV)
+            self.register_buffer('W_HDV', W_HDV)
+            '''
+            self.dt = 0.1
+            self.A = torch.tensor([[1, 0, 0, 0, 0, 0], [0, 1, 0, 0, 0, 0], [0, self.dt, 1, -self.dt, 0, 0], [0, 0, 0, 1, 0, 0], [0, 0, 0, self.dt, 1, -self.dt], [0, 0, 0, 0, 0, 1]],dtype=torch.float32)
+            self.b = torch.tensor([[0,0,0],[0,0,0],[0,0,0],[0,self.dt,0],[0,0,0],[0,0,self.dt]],dtype=torch.float32)
+            self.A = self.A.unsqueeze(0)
+            self.b = self.b.unsqueeze(0)
+            # Use a simple Euler update for each vehicle.
+            # x shape: [batch_size, num_vehicles, 2]
+            # u shape: [batch_size, number_of_CAVs]
+            # a shape: [batch_size, number_of_vehicles] (or similar)
+
+   
+        def forward(self, x):
             # x, y shape: [batch_size, num_vehicles * 2]
             batch_size = 1#x.shape[0]
             num_vehicles = len(self.state_dims)
@@ -36,88 +65,44 @@ def combined_model(V_net, controllers, output_file, state_dims, cav_indices):
             x_stars = x_stars.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, num_vehicles, 2]
             
             # 只输出CAV的控制器输出
-            '''
-            output_controllers = []
-            for i in self.cav_indices:
-                state_i = x[:, i, :]  # 获取第i辆车的状态
-                x_star_i = x_stars[:, i, :]  # 获取第i辆车的期望状态
-                u_star = torch.zeros(1, device=x.device)
-                u_bounds = (torch.tensor(-5.0, device=x.device), 
-                          torch.tensor(5.0, device=x.device))
-                control = self.controllers[i](state_i, x_star_i, u_star, u_bounds)
-                output_controllers.append(control)
-            output_controllers = torch.cat(output_controllers, dim=-1)
-            '''
             u_bounds = (torch.tensor(-5.0, device=x.device), 
                           torch.tensor(5.0, device=x.device))
             u_star = torch.zeros(1, device=x.device)
             output_controllers = self.controllers(x, x_stars, u_star, u_bounds)
+
+            x_with_preceding = torch.matmul(x.view(batch_size, -1), self.W_state_with_preceding)  # [batch_size, 6]
+            a_HDV = self.system_dynamics(x_with_preceding)  # 根据系统动力学定义
             
-            output_V1 = self.V_net(x, x_stars)
-            output_V2 = self.V_net(y, x_stars)
-            
-            return output_controllers, output_V1, output_V2
+            controllers_temp = self.controllers_temp(x, x_stars, u_star, u_bounds)
+            zero_tensor = controllers_temp * 0
+            acceleration = torch.cat([zero_tensor,controllers_temp,a_HDV], dim=1)  # [batch_size, num_vehicles]
+        
+            next_state = torch.matmul(self.A, x.reshape(2*num_vehicles)) + torch.matmul(self.b, acceleration.reshape(num_vehicles))
+            output_V = self.V_net_1(x, x_stars)
+            next_V = self.V_net_2(next_state, x_stars)
+
+            return output_V, next_state, next_V
     
     # Create and export combined model
-    combined_network = CombinedNetwork(controllers[cav_indices[0]], V_net, cav_indices, state_dims)
+    combined_network = CombinedNetwork(controllers, V_net, cav_indices, state_dims, system_dynamics)
     
     # 创建包含所有车辆状态的dummy输入
-    dummy_input_x = torch.randn(1, len(state_dims), state_dims[0],requires_grad=True)  # [1, num_vehicles]
-    dummy_input_y = torch.randn(1, len(state_dims), state_dims[0],requires_grad=True)  # [1, num_vehicles]
+    #dummy_input_x = torch.randn(1, len(state_dims), state_dims[0],requires_grad=True)  # [1, num_vehicles]
+    dummy_input_x = torch.tensor([[[20,15],[21,14],[21,13]]],requires_grad=True, dtype=torch.float32)  # [1, num_vehicles]
     
-    print("dummy_input_x", dummy_input_x)
-    print("dummy_input_y", dummy_input_y)
-    output1, output2, output3 = combined_network(dummy_input_x, dummy_input_y)
-    print("output1", output1)
-    print("output2", output2)
-    print("output3", output3)
+    #print("dummy_input_x", dummy_input_x)
+    #output1, output2, output3 = combined_network(dummy_input_x)
+    output1 = combined_network(dummy_input_x)
+    #print("input_x", dummy_input_x)
+    #print("output1", output1)
+    #print("output2", output2)
+    #print("output3", output3)
 
     torch.onnx.export(
         combined_network,
-        (dummy_input_x, dummy_input_y),
+        (dummy_input_x),
         output_file,
         export_params=True,opset_version=10,do_constant_folding=True,
-        input_names=['input_x', 'input_y'],
-        output_names=['controllers_out', 'V1_out', 'V2_out']
-    )
-
-def combine_prev_cur(V_net, output_file, state_dims):
-    """
-    Combine current and previous V_net into a single ONNX model
-    
-    Args:
-        V_net: Current Vector Lyapunov network
-        prev_V_net: Previous Vector Lyapunov network
-        output_file: Path to save combined ONNX model
-        state_dims: List of state dimensions for each vehicle
-    """
-    class CombinedNetwork(nn.Module):
-        def __init__(self, V_net, state_dims):
-            super(CombinedNetwork, self).__init__()
-            self.V_net = V_net
-            self.state_dims = state_dims
-
-        def forward(self, x):
-            batch_size = x.shape[0]
-            num_vehicles = self.state_dims[1]
-            x_stars = torch.tensor([[20.0, 15.0]] * num_vehicles, device=x.device)  # [num_vehicles, 2]
-            x_stars = x_stars.unsqueeze(0).expand(batch_size, -1, -1)  # [batch_size, num_vehicles, 2]
-            
-            output_current = self.V_net(x, x_stars)
-
-            return output_current
-
-    # Create and export combined model
-    combined_network = CombinedNetwork(V_net, state_dims)
-    
-
-    dummy_input = torch.randn(1, state_dims[1], state_dims[0])  
-    
-    torch.onnx.export(
-        combined_network,
-        dummy_input,
-        output_file,
-        input_names=['input'],
-        output_names=['output_current'],
-        dynamic_axes={'input': {0: 'batch_size'}}
+        input_names=['input_x'],
+        output_names=['output_V','next_state','next_V'],
     )
