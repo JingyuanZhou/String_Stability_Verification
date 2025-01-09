@@ -19,6 +19,8 @@ dynamics_params = {
     'desired_spacing': 20.0
 }
 
+if_load_pre_trained_model = True
+
 # 创建连接矩阵
 connection_matrix = {i: {} for i in range(num_vehicles)}
 for i in range(1, num_vehicles):
@@ -35,12 +37,31 @@ system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynami
 check_point = torch.load(f'model_weights/best_model-v22.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
-controller_parameters = {}
-for k, v in parameters.items():
-    if k.startswith('controllers.1.network'):
-        # 从 'controllers.1.network.0.weight' 转换为 '1.network.0.weight'
-        new_key = k.replace('controllers.', '')
-        controller_parameters[new_key] = v
+
+if if_load_pre_trained_model:
+    pre_trained_model = "pre_train_model/sac_platoon_-1_actor.pth"
+    raw_parameters = torch.load(pre_trained_model)
+    controller_parameters = {}
+    for k, v in raw_parameters.items():
+        if k.startswith('trunk'):
+            new_key = k.replace('trunk', '1.network')
+            # 如果是最后一层的参数，只取一半（对应均值输出）
+
+            if '1.network.4.weight' in new_key:  
+                controller_parameters[new_key] = v[:1, :]  # 只保留第一行，对应均值
+            elif '1.network.4.bias' in new_key:
+                controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
+            else:
+                controller_parameters[new_key] = v
+
+    print("Original keys:", raw_parameters.keys())
+    print("New keys:", controller_parameters.keys())
+else:
+    controller_parameters = {}
+    for k, v in parameters.items():
+        if k.startswith('controllers.1.network'):
+            new_key = k.replace('controllers.', '')
+            controller_parameters[new_key] = v
 
 controllers = nn.ModuleList([
     NetworkController(6, 1) if i in cav_indices  # state_dim=2, control_dim=1
@@ -63,7 +84,7 @@ for i in range(1, num_vehicles):
     states[:, i, 1] = 15.0  # 初始速度
 
 # 存储轨迹
-time_steps = 500
+time_steps = 1000
 trajectories = [states.clone()]
 disturbances = torch.zeros((batch_size, num_vehicles))
 
@@ -81,6 +102,7 @@ with torch.no_grad():
                 x_star = torch.tensor([20.0, 15.0]*3)  # 期望状态
                 u_star = torch.zeros(1)
                 u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
+
                 control = controllers[i](states, x_star, u_star, u_bounds)
                 controls.append(control)#
             else:

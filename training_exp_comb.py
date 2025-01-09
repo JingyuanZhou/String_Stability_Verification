@@ -163,14 +163,14 @@ class VectorLyapunovNetwork(nn.Module):
         x_star_2 = torch.matmul(x_star, self.W_star)
 
         # calculation of Lyapunov function
-        V_1 = self.network_1(x1) - self.network_1(x_star_1)
-        V_2 = self.network_2(x2) - self.network_2(x_star_2)
+        V_1 = self.network_1(x1)# - self.network_1(x_star_1)
+        V_2 = self.network_2(x2)# - self.network_2(x_star_2)
 
         V = torch.cat([V_1, V_2], dim=1)
         return V
 
 class NetworkController(nn.Module):
-    def __init__(self, state_dim, control_dim, hidden_dim=30):
+    def __init__(self, state_dim, control_dim, hidden_dim=128):
         super().__init__()
         self.network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
@@ -180,6 +180,14 @@ class NetworkController(nn.Module):
             nn.Linear(hidden_dim, control_dim)
         )
         self.state_dim = state_dim
+        self.W_change_state_position = torch.zeros(self.state_dim, self.state_dim, requires_grad=False)
+        #index from 0 1 2 3 4 5 to 1 3 5 0 2 4
+        self.W_change_state_position[1, 0] = 1
+        self.W_change_state_position[3, 1] = 1
+        self.W_change_state_position[5, 2] = 1
+        self.W_change_state_position[0, 3] = 1
+        self.W_change_state_position[2, 4] = 1
+        self.W_change_state_position[4, 5] = 1
         
     def forward(self, x, x_star, u_star, u_bounds):
         """
@@ -187,7 +195,9 @@ class NetworkController(nn.Module):
         """
         u_min, u_max = u_bounds
         x = x.reshape(-1, self.state_dim)
+        x = x @ self.W_change_state_position
         x_star = x_star.reshape(-1, self.state_dim)
+        x_star = x_star @ self.W_change_state_position
         phi_pi = self.network(x)
         phi_pi_star = self.network(x_star)
         u = phi_pi#torch.clamp(phi_pi, u_min, u_max)# - phi_pi_star + u_star
