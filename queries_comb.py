@@ -9,7 +9,6 @@ sys.path.append("/home/zhoujy53/Desktop/Marabou")
 from maraboupy import Marabou
 from maraboupy import MarabouCore, MarabouUtils
 
-from convertsinglenetwork import single_model
 #from training_exp_mask import LyapunovNetworkV, TwoDimDocking
 
 # from maraboupy import MarabouCore
@@ -123,20 +122,21 @@ class VerificationQuery:
         for i in range(self.num_lyap):
             # Positive constraint: v_current[i] >= 0
 
-            #network.setLowerBound(v_current[i], 0.0)
-            #network.setLowerBound(v_next[i], 0.0)
+            network.setLowerBound(v_current[i], 0.0)
+            network.setLowerBound(v_next[i], 0.0)
 
             # Descent constraint
             
-            aii = 0.6
-            epsilon = -0.01
+            aii = 0.05
+            epsilon = 0.0
             vars = [v_next[i], v_current[i]]
             coeffs = [1.0, -1.0 + aii]  # Coefficients for v_next[i] and v_current[i]
 
             # Add coefficients for system.connections[i+1]
             for j in self.system.connections[i+1]:
-                vars.append(v_current[j-1])  # Add v_current[j-1] variable
-                coeffs.append(-self.system.connections[i+1][j])  # Corresponding coefficient
+                if j >= 1:
+                    vars.append(v_current[j-1])  # Add v_current[j-1] variable
+                    coeffs.append(-self.system.connections[i+1][j])  # Corresponding coefficient
 
             # Add the inequality to the network
             network.addInequality(
@@ -192,7 +192,7 @@ def safe_descent_cond_check(
     # => 4 个区间(因为有5个端点)
     split_num = 13
     spacing_space = np.linspace(5, 35, split_num)
-    velocity_space = np.linspace(0, vel_limit, split_num)
+    velocity_space = np.linspace(2, vel_limit, split_num)
 
     # 3) 存储验证结果
     vals_found = []       # 用来记录找到的反例
@@ -219,7 +219,7 @@ def safe_descent_cond_check(
                         [round(velocity_space[k], 2),  round(velocity_space[k+1], 2)],
                         # agent=2
                         [5, 35],
-                        [0, vel_limit]
+                        [2, vel_limit]
                     ]
                 elif agent == 2:
                     state_bounds = [
@@ -227,7 +227,7 @@ def safe_descent_cond_check(
                         [15, 15],   # velocity_头车
                         # agent=1
                         [5, 35],
-                        [0, vel_limit],
+                        [2, vel_limit],
                         # agent=2
                         [round(spacing_space[i], 2),   round(spacing_space[i+1], 2)],
                         [round(velocity_space[k], 2),  round(velocity_space[k+1], 2)]

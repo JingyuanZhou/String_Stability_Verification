@@ -19,7 +19,7 @@ dynamics_params = {
     'desired_spacing': 20.0
 }
 
-if_load_pre_trained_model = True
+if_load_pre_trained_model = False
 
 # 创建连接矩阵
 connection_matrix = {i: {} for i in range(num_vehicles)}
@@ -34,7 +34,7 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v22.ckpt')
+check_point = torch.load(f'model_weights/best_model-v2.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
 
@@ -92,7 +92,7 @@ disturbances = torch.zeros((batch_size, num_vehicles))
 with torch.no_grad():
     for t in range(time_steps):
         # 为领头车添加正弦扰动
-        disturbances[:, 0] = 2.0 * torch.sin(torch.tensor(2 * np.pi * t / 50))  # 振幅2.0，周期50步
+        disturbances[:, 0] = 3.0 * torch.sin(torch.tensor(2 * np.pi * t / 50))  # 振幅2.0，周期50步
         
         # 计算控制输入
         controls = []
@@ -140,8 +140,8 @@ for i in range(num_vehicles):
 plt.tight_layout()
 
 # visualize lyapunov functions
-spacing_space = np.linspace(0, 40, 100)
-velocity_space = np.linspace(0, 30, 100)
+spacing_space = np.linspace(5, 35, 100)
+velocity_space = np.linspace(2, 30, 100)
 V = np.zeros((len(spacing_space), len(velocity_space)))
 
 state_dims = [2] * num_vehicles
@@ -157,7 +157,7 @@ V_net.load_state_dict(V_parameters)
 
 for i, s in enumerate(spacing_space):
     for j, v in enumerate(velocity_space):
-        x = torch.tensor([[20.0, 15.0,s, v,20.0, 15.0]],dtype=torch.float32)
+        x = torch.tensor([[20.0, 15.0,s, v, 20.0, 15.0]],dtype=torch.float32)
         x_star = torch.tensor([[20.0, 15.0]*3],dtype=torch.float32)
         V[i, j] = V_net(x, x_star)[0][0].item()
 
@@ -178,7 +178,7 @@ surf = ax.plot_surface(X, Y, Z, cmap='viridis')
 # We'll assume you have it, for example:
 # equilibrium_z = ...  # e.g., Z at that coordinate
 # For demonstration, let's just pick the nearest index or a known value:
-equilibrium_z = 0.0  # Replace with the actual value from V
+equilibrium_z = V[20,15]  # Replace with the actual value from V
 
 ax.scatter(20, 15, equilibrium_z, color='r', marker='x', s=50, label='equilibrium')
 

@@ -208,11 +208,13 @@ class PlatoonEnv(gym.Env):
         efficiency = 0
         if state[4]/state[1] > 2.5:  # 车距过大惩罚
             efficiency = -2.5
+
+        dist_equlibruim = -np.sqrt((state[4] - self.s0)**2 + (state[1] - self.v0)**2)
         
         stability = 0
         decay_weights = np.linspace(0.6, 0.1, self.num_vehicles - self.cav_index[0])
         for i in range(self.cav_index[0], self.cav_index[0]+1):
             stability -= decay_weights[i - self.cav_index[0]] * (state[i-1] - state[i-2])**2
 
-        reward = safety * 0.3 + efficiency * 0.3 + stability * 0.1
+        reward = safety * 0.3 + efficiency * 0.3 + stability * 0.1 + dist_equlibruim * 0.3
         return reward

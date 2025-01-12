@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 import torch.onnx
-
-from attempt_conversion import LearnedController
+from onnxsim import simplify
+import onnx
 
 def combined_model(V_net, controllers, system_dynamics, output_file, state_dims, cav_indices): 
     """
@@ -106,3 +106,7 @@ def combined_model(V_net, controllers, system_dynamics, output_file, state_dims,
         input_names=['input_x'],
         output_names=['output_V','next_state','next_V'],
     )
+
+    model = onnx.load(output_file)
+    model_simp, check = simplify(model)
+    onnx.save(model_simp, output_file)

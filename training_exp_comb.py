@@ -141,6 +141,20 @@ class VectorLyapunovNetwork(nn.Module):
         self.register_buffer('W2', W2)
         self.register_buffer('W_star', W_star)
 
+        #self.R1 = self._init_R_matrix(self.one_state_dim)
+        #self.R2 = self._init_R_matrix(self.one_state_dim)
+
+    def _init_R_matrix(self, dim):
+        """Initialize R matrix with SVD parameterization"""
+        U = torch.randn(dim, dim)
+        U, _ = torch.linalg.qr(U)  # Orthonormal U
+        V = torch.randn(dim, dim)
+        V, _ = torch.linalg.qr(V)  # Orthonormal V
+        sigma = torch.ones(dim)  # Initial Σ
+        r = nn.Parameter(torch.randn(dim))  # Learnable r parameters
+        
+        return nn.Parameter(U @ (torch.diag(sigma + r**2)) @ V.T)
+
     def forward(self, x, x_star):
         """
         计算 Lyapunov 函数值，不使用任何切片或 gather 操作。
@@ -162,11 +176,17 @@ class VectorLyapunovNetwork(nn.Module):
         x_star_1 = torch.matmul(x_star, self.W_star)
         x_star_2 = torch.matmul(x_star, self.W_star)
 
+        #state_diff_1 = x1 - x_star_1
+        #R_term_1 = torch.norm(torch.matmul(state_diff_1, self.R1.T), p=1, dim=1)
+        #state_diff_2 = x2 - x_star_2
+        #R_term_2 = torch.norm(torch.matmul(state_diff_2, self.R2.T), p=1, dim=1)
+
         # calculation of Lyapunov function
-        V_1 = self.network_1(x1)# - self.network_1(x_star_1)
-        V_2 = self.network_2(x2)# - self.network_2(x_star_2)
+        V_1 = self.network_1(x1) - self.network_1(x_star_1) #+ R_term_1
+        V_2 = self.network_2(x2) - self.network_2(x_star_2) #+ R_term_2
 
         V = torch.cat([V_1, V_2], dim=1)
+            
         return V
 
 class NetworkController(nn.Module):
@@ -434,11 +454,12 @@ class StringStabilityTrainer(pl.LightningModule):
         V_decreases = []
         #V_diff = torch.sum(nn.ReLU(V_current - beta))
         for i in range(1, states.shape[1]):  # Skip leading vehicle
-            decrease = V_next[i-1] - V_current[i-1]
+            decrease = V_next[:,i-1] - V_current[:,i-1]
             # Add interconnection terms based on connection matrix
-            decrease += 0.6 * V_current[i-1]
+            decrease += 0.05 * V_current[:,i-1]
             for j in self.system.connections[i]:
-                decrease -= self.system.connections[i][j] * V_current[j-1]
+                if j >= 1:
+                    decrease -= self.system.connections[i][j] * V_current[:,j-1]
             # Add disturbance term
             #decrease -= torch.norm(disturbances[i])**2
             V_decreases.append(decrease)
@@ -451,10 +472,11 @@ class StringStabilityTrainer(pl.LightningModule):
         states, x_stars, disturbances = batch
 
         # Compute vector Lyapunov conditions
+        epsilon = 1e-3
         V_decreases, V_current = self.vector_lyapunov_conditions(states, x_stars, disturbances)
 
         # Compute loss ensuring string stability conditions
-        loss = torch.relu(V_decreases).mean() + 0.1 * torch.relu(-V_current).mean()
+        loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean()
         
         # Update networks
         opt.zero_grad()
@@ -463,14 +485,17 @@ class StringStabilityTrainer(pl.LightningModule):
         
         # Add detailed logging
         self.log("train_loss", loss, prog_bar=True)  # Show in progress bar
+        self.log("loss_decrease", torch.relu(V_decreases).mean(), prog_bar=True)
+        self.log("loss_positive", 10*torch.relu(-V_current).mean(), prog_bar=True)
         
         return loss
 
     def validation_step(self, batch, batch_idx):
         
         states, x_stars, disturbances = batch
+        epsilon = 1e-3
         V_decreases, V_current = self.vector_lyapunov_conditions(states, x_stars, disturbances)
-        val_loss = torch.relu(V_decreases + 1e-4).mean() + 0.1 * torch.relu(-V_current).mean()
+        val_loss = torch.relu(V_decreases+epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean()
         
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
@@ -484,7 +509,7 @@ class StringStabilityTrainer(pl.LightningModule):
         # Add V_net parameters
         parameters.extend(self.V_net.parameters())
         
-        if self.current_index > 1:
+        if self.current_index > 20:
             # Add controller parameters using index
             for i in range(len(self.controllers)):
                 if self.controllers[i] is not None and hasattr(self.controllers[i], 'parameters'):
@@ -495,7 +520,7 @@ class StringStabilityTrainer(pl.LightningModule):
 
 class PlatoonDataModule(pl.LightningDataModule):
     def __init__(self, num_vehicles, cav_indices, dynamics_params, 
-                 batch_size=32, num_samples=20000):
+                 batch_size=16, num_samples=10000):
         super().__init__()
         self.num_vehicles = num_vehicles
         self.cav_indices = cav_indices
@@ -504,7 +529,7 @@ class PlatoonDataModule(pl.LightningDataModule):
         self.num_samples = num_samples
         
         # Define state ranges
-        self.spacing_range = (15.0, 25.0)  # Centered around desired_spacing
+        self.spacing_range = (0.0, 40.0)  # Centered around desired_spacing
         self.vel_range = (0.0, 30.0)
         self.dist_range = (-0.5, 0.5)
         
@@ -600,14 +625,14 @@ def create_platoon_connections(num_vehicles, cav_indices):
     for i in range(1, num_vehicles):
         if i in cav_indices:
             # CAVs can potentially connect to multiple vehicles
-            connections[i][i-1] = 0#0.2  # Connection to immediate predecessor
+            connections[i][i-1] = 0.0#0.001#0.2  # Connection to immediate predecessor
             if i > 1:
-                connections[i][i-2] = 0#0.1  # Connection to second predecessor
+                connections[i][i-2] = 0.0#0.001#0.1  # Connection to second predecessor
             if i < num_vehicles - 1:
-                connections[i][i+1] = 0#0.2  # Connection to follower
+                connections[i][i+1] = 0.0#0.002#0.2  # Connection to follower
         else:
             # HDVs only connect to immediate predecessor
-            connections[i][i-1] = 0#0.3
+            connections[i][i-1] = 0.0#0.002#0.3
             
     return connections
 
@@ -639,7 +664,20 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
         else nn.Identity() for i in range(num_vehicles)
     ])
     if pre_trained_model is not None:
-        controllers[1].load_state_dict(pre_trained_model)
+        raw_parameters = torch.load(pre_trained_model)
+        controller_parameters = {}
+        for k, v in raw_parameters.items():
+            if k.startswith('trunk'):
+                new_key = k.replace('trunk', '1.network')
+                # 如果是最后一层的参数，只取一半（对应均值输出）
+
+                if '1.network.4.weight' in new_key:  
+                    controller_parameters[new_key] = v[:1, :]  # 只保留第一行，对应均值
+                elif '1.network.4.bias' in new_key:
+                    controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
+                else:
+                    controller_parameters[new_key] = v
+        controllers.load_state_dict(controller_parameters)
 
     # Initialize system dynamics
     if system_dynamics_network is not None:
@@ -699,8 +737,8 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
 
         # generate new x_stars for counterexamples, which is of same size as counterexamples
         new_x_stars = torch.zeros_like(self.counterexamples)
-        new_x_stars[..., 0] = 15.0
-        new_x_stars[..., 1] = 20.0
+        new_x_stars[..., 0] = 20.0
+        new_x_stars[..., 1] = 15.0
 
         new_data_disturbances = torch.zeros_like(self.counterexamples[:,0,:].squeeze())
 
@@ -709,6 +747,7 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         combined_data_x_stars = torch.cat([old_data_x_stars, new_x_stars], dim=0)
         combined_data_disturbances = torch.cat([old_data_disturbances, new_data_disturbances], dim=0)
 
+        # add some data augementation for original counterexamples
         combined_data = (combined_data_states, combined_data_x_stars, combined_data_disturbances)
         
         # 保存新的训练数据
@@ -723,6 +762,62 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
 
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.batch_size)
+
+def check_counter_examples(V_net, controllers, system, cav_indices, counterexamples):
+    # check if the counterexamples are really counterexamples
+    number_of_false_counterexamples = 0
+    for i in range(counterexamples.shape[0]):
+
+        state = counterexamples[i]
+        x_star = torch.zeros_like(state)
+        x_star[...,0] = 20.0
+        x_star[...,1] = 15.0
+        disturbances = torch.zeros_like(state[0])
+        V_values = V_net(state, x_star)
+        controls = []
+        for j in range(state.shape[0]):
+            if j in cav_indices:
+                controller = controllers[j]
+                u_star = torch.zeros(1)
+                u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
+                control = controller(state, x_star, u_star, u_bounds)
+                controls.append(control)
+            else:
+                controls.append(None)
+        
+        next_states = system.next_state(state.unsqueeze(0), controls, disturbances.unsqueeze(0))
+        V_next = V_net(next_states, x_star)
+        if torch.all(V_next - 0.95*V_values <= 0) and torch.all(V_values >= 0):
+            #print("Counterexample is not a counterexample!")
+            #print("V_next: ", V_next)
+            #print("V_values: ", V_values)
+            number_of_false_counterexamples += 1
+    if number_of_false_counterexamples == 0:
+        print("All counterexamples are valid!")
+    else:
+        print(f"{number_of_false_counterexamples} false counterexamples found!")
+        
+def add_noise_to_counterexamples(counterexamples):
+    """
+    Add noise to counterexamples for data augmentation
+    
+    Args:
+        counterexamples (tensor): Counterexamples to add noise
+        expansion_factor (float): Maximum noise level as a fraction of the counterexample range
+    
+    Returns:
+        counterexamples (tensor): Augmented counterexamples
+    """
+    
+    counter_example_expanded = counterexamples
+    for i in range(9):
+        noise = (torch.rand_like(counterexamples) - 0.5) * 0.1 * (i+1)
+        noise[:, 0, 0] = 0.0  # No noise on first vehicle spacing
+        noise[:, 0, 1] = 0.0  # No noise on first vehicle velocity
+        counter_example_expanded = torch.cat([counter_example_expanded, counterexamples + noise], dim=0)
+    print("original counterexamples: ", counterexamples.shape)
+    print("expanded counterexamples: ", counter_example_expanded.shape)
+    return counter_example_expanded
 
 def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params,
                  counterexamples, counterexample_ranges, epoch,
@@ -764,6 +859,8 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_
     else:
         system = PlatoonDynamics(dynamics_params, connection_matrix)
 
+    check_counter_examples(V_net, controllers, system, cav_indices, counterexamples)
+    counterexamples = add_noise_to_counterexamples(counterexamples)
     # Initialize data module with counterexamples
     data_module = PlatoonDataModuleRetrain(
         epoch, counterexamples, counterexample_ranges,
@@ -785,7 +882,7 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_
         filename=f'best_model',
         save_top_k=1,
         mode='min',
-        save_last=True
+        save_last=False
     )
 
     # Train the system
