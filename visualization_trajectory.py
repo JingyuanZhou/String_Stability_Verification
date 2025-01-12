@@ -19,7 +19,7 @@ dynamics_params = {
     'desired_spacing': 20.0
 }
 
-if_load_pre_trained_model = False
+if_load_pre_trained_model = True
 
 # 创建连接矩阵
 connection_matrix = {i: {} for i in range(num_vehicles)}

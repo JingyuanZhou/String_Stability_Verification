@@ -191,30 +191,11 @@ class PlatoonEnv(gym.Env):
 
         # spacing equilibrium
         # print(self.spacing[self.cav_index[0]])
-        spacing_equilibrium = -0.3*(self.spacing[self.cav_index[0]] - self.s0)**2
+        spacing_equilibrium = -(self.spacing[self.cav_index[0]] - self.s0)**2
+        
             
-        reward_weights = [0.3, 0.3, 0.1, 0.1, 0.0]
+        reward_weights = [0.3, 0.3, 0.1, 0.1, 0.00001]
         # print(f"reward_safety: {safety}, reward_efficiency: {efficiency}, reward_stability: {stability}, reward_fuel_consumption: {fuel_consumption}, reward_spacing_equilibrium: {spacing_equilibrium}")
 
         return safety * reward_weights[0] + efficiency * reward_weights[1] + stability * reward_weights[2] + fuel_consumption * reward_weights[3] + spacing_equilibrium * reward_weights[4]
     
-    def get_reward_given_state(self, state):
-        ttc = state[4] / (state[0] - state[1] + 1e-6)
-        if 0 < ttc < 4:
-            safety = np.log(ttc / 4)
-        else:
-            safety = 0
-        
-        efficiency = 0
-        if state[4]/state[1] > 2.5:  # 车距过大惩罚
-            efficiency = -2.5
-
-        dist_equlibruim = -np.sqrt((state[4] - self.s0)**2 + (state[1] - self.v0)**2)
-        
-        stability = 0
-        decay_weights = np.linspace(0.6, 0.1, self.num_vehicles - self.cav_index[0])
-        for i in range(self.cav_index[0], self.cav_index[0]+1):
-            stability -= decay_weights[i - self.cav_index[0]] * (state[i-1] - state[i-2])**2
-
-        reward = safety * 0.3 + efficiency * 0.3 + stability * 0.1 + dist_equlibruim * 0.3
-        return reward

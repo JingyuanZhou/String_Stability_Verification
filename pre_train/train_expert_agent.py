@@ -22,9 +22,9 @@ def train_expert():
         
         # 环境参数
         'env': {
-            'num_vehicles': 4,
+            'num_vehicles': 3,
             'dt': 0.1,
-            'cav_index': [2],
+            'cav_index': [1],
             'select_scenario': 0,
         },
         
@@ -175,7 +175,7 @@ def train_expert():
                 if learn_steps % args['train']['log_interval'] == 0:
                     for key, loss in losses.items():
                         writer.add_scalar(key, loss, global_step=learn_steps)
-
+                    save(agent, epoch, args, output_dir='pre_train_model')
             state = next_state
 
         # 记录episode信息
