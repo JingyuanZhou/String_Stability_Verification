@@ -39,7 +39,7 @@ parameters = check_point['state_dict']
 # 重新映射参数键名
 
 if if_load_pre_trained_model:
-    pre_trained_model = "pre_train_model/sac_platoon_-1_actor.pth"
+    pre_trained_model = "pre_train_model/sac_platoon_70_actor.pth"
     raw_parameters = torch.load(pre_trained_model)
     controller_parameters = {}
     for k, v in raw_parameters.items():
