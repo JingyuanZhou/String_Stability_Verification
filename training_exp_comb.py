@@ -466,6 +466,46 @@ class StringStabilityTrainer(pl.LightningModule):
             
         return torch.stack(V_decreases), V_current
 
+    def cal_reward_objective(self, states, x_stars, disturbances):
+        """
+        Calculate reward objective for other objectives
+        """
+
+        spacing = states[:, :, 0]
+        velocity = states[:, :, 1]
+        cav_index = 1
+
+        '''
+        ttc = spacing[:,cav_index] / (velocity[:,cav_index-1] - velocity[:,cav_index] + 1e-6)
+        safety_list = []
+
+        for i in range(0, states.shape[0]):
+            if 0 < ttc[i] < 4:
+                safety = torch.log(ttc[i] / 4)
+            else:
+                safety = 0
+            safety_list.append(safety)
+
+        efficiency_list = []
+        for i in range(0, states.shape[1]):
+            efficiency = 0
+            if self.spacing[i,1]/self.velocity[i,1] > 2.5:  # 车距过大惩罚
+                efficiency -= 2.5
+            efficiency_list.append(efficiency)
+        '''
+
+        #stability = 0
+        # calculate a decay weights for stability
+        #decay_weights = np.linspace(0.6, 0.1, 3 - cav_index)
+        #for i in range(cav_index, cav_index+2):
+        #    stability = decay_weights[i - cav_index] * (velocity[:,i] - velocity[:,i-1])**2
+
+        reward_weights = [0.3, 0.3, 0.1]
+
+        reward = 0#reward_weights[2] * stability.mean()
+        
+        return reward
+
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
         
@@ -475,8 +515,13 @@ class StringStabilityTrainer(pl.LightningModule):
         epsilon = 1e-3
         V_decreases, V_current = self.vector_lyapunov_conditions(states, x_stars, disturbances)
 
+        reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
+
         # Compute loss ensuring string stability conditions
-        loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean()
+        if self.current_index == 0:
+            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean()
+        else: 
+            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + reward_related_loss
         
         # Update networks
         opt.zero_grad()
@@ -494,8 +539,12 @@ class StringStabilityTrainer(pl.LightningModule):
         
         states, x_stars, disturbances = batch
         epsilon = 1e-3
+        reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
         V_decreases, V_current = self.vector_lyapunov_conditions(states, x_stars, disturbances)
-        val_loss = torch.relu(V_decreases+epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean()
+        if self.current_index == 0:
+            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean()
+        else: 
+            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + reward_related_loss
         
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
@@ -625,14 +674,14 @@ def create_platoon_connections(num_vehicles, cav_indices):
     for i in range(1, num_vehicles):
         if i in cav_indices:
             # CAVs can potentially connect to multiple vehicles
-            connections[i][i-1] = 0.0#0.001#0.2  # Connection to immediate predecessor
+            connections[i][i-1] = 0.01#0.2  # Connection to immediate predecessor
             if i > 1:
-                connections[i][i-2] = 0.0#0.001#0.1  # Connection to second predecessor
+                connections[i][i-2] = 0.01#0.1  # Connection to second predecessor
             if i < num_vehicles - 1:
-                connections[i][i+1] = 0.0#0.002#0.2  # Connection to follower
+                connections[i][i+1] = 0.02#0.2  # Connection to follower
         else:
             # HDVs only connect to immediate predecessor
-            connections[i][i-1] = 0.0#0.002#0.3
+            connections[i][i-1] = 0.02#0.3
             
     return connections
 
@@ -787,6 +836,8 @@ def check_counter_examples(V_net, controllers, system, cav_indices, counterexamp
         
         next_states = system.next_state(state.unsqueeze(0), controls, disturbances.unsqueeze(0))
         V_next = V_net(next_states, x_star)
+
+
         if torch.all(V_next - 0.95*V_values <= 0) and torch.all(V_values >= 0):
             #print("Counterexample is not a counterexample!")
             #print("V_next: ", V_next)

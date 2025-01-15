@@ -183,8 +183,8 @@ class PlatoonEnv(gym.Env):
         # 计算稳定性奖励
         stability = 0
         # calculate a decay weights for stability
-        decay_weights = np.linspace(0.6, 0.1, self.num_vehicles - self.cav_index[0])
-        for i in range(self.cav_index[0], self.cav_index[0]+1):
+        decay_weights = np.linspace(0.6, 0.1, self.num_vehicles - self.cav_index[0]+1)
+        for i in range(self.cav_index[0], self.cav_index[0]+2):
             stability -= decay_weights[i - self.cav_index[0]] * (self.velocity[i] - self.velocity[i-1])**2
 
         fuel_consumption = -self.acceleration[self.cav_index[0]]**2
@@ -194,7 +194,7 @@ class PlatoonEnv(gym.Env):
         spacing_equilibrium = -(self.spacing[self.cav_index[0]] - self.s0)**2
         
             
-        reward_weights = [0.3, 0.3, 0.0, 0.1, 0.0]
+        reward_weights = [0.3, 0.3, 0.1, 0.0, 0.0]
         # print(f"reward_safety: {safety}, reward_efficiency: {efficiency}, reward_stability: {stability}, reward_fuel_consumption: {fuel_consumption}, reward_spacing_equilibrium: {spacing_equilibrium}")
 
         return safety * reward_weights[0] + efficiency * reward_weights[1] + stability * reward_weights[2] + fuel_consumption * reward_weights[3] + spacing_equilibrium * reward_weights[4]

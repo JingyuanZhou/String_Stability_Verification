@@ -41,7 +41,7 @@ max_iters = 10000
 index = 0
 out_comb_folders = "combined/"
 cur_comb_file = out_comb_folders + f"combined_{index}.onnx"
-pre_trained_model = "pre_train_model/sac_platoon_-1_actor.pth"
+pre_trained_model = "pre_train_model/sac_platoon_99_actor.pth"
 
 # Train the model
 system_dynamics_network = system_network(state_dim=3)
