@@ -33,7 +33,7 @@ def train_expert():
             'gamma': 0.99,
             'critic_tau': 0.005,
             'init_temp': 0.1,
-            'hidden_dim': 128,
+            'hidden_dim': 30,
             'hidden_depth': 2,
             'actor_lr': 1e-3,
             'critic_lr': 1e-3,
