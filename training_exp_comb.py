@@ -102,7 +102,43 @@ class VectorLyapunovNetwork_general(nn.Module):
         phi_V = self.network(x)
         V = phi_V
         return V
-    
+
+class GraphCouplingMatrix(nn.Module):
+    def __init__(self, N):
+        """
+        A learnable coupling matrix.
+        
+        Args:
+            N (int): Number of vehicles.
+        """
+        super(GraphCouplingMatrix, self).__init__()
+        self.N = N
+        # 直接定义一个可学习的参数矩阵
+        self.coupling_matrix = nn.Parameter(torch.zeros(N, N))
+        self.reset_parameters()
+        
+    def reset_parameters(self):
+        """Initialize the coupling matrix with small values"""
+        nn.init.uniform_(self.coupling_matrix, 0.01, 0.03)
+        
+    def forward(self, G):
+        """
+        Forward pass to get the masked coupling matrix.
+        
+        Args:
+            G (torch.Tensor): Adjacency matrix of shape (N, N), binary values {0,1}.
+        
+        Returns:
+            torch.Tensor: Masked and nonnegative coupling matrix of shape (N, N).
+        """
+        # Apply ReLU for nonnegativity
+        A_tilde = torch.relu(self.coupling_matrix)
+        
+        # Apply adjacency matrix mask
+        A_masked = A_tilde * G
+        
+        return A_masked
+
 class VectorLyapunovNetwork(nn.Module):
     def __init__(self, state_dim, hidden_dim=30):
         super(VectorLyapunovNetwork, self).__init__()
@@ -125,6 +161,7 @@ class VectorLyapunovNetwork(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
+        self.coupling_matrix = GraphCouplingMatrix(self.num_vehicles)
 
         W1 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
         W2 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
@@ -188,6 +225,7 @@ class VectorLyapunovNetwork(nn.Module):
         V = torch.cat([V_1, V_2], dim=1)
             
         return V
+    
 
 class NetworkController(nn.Module):
     def __init__(self, state_dim, control_dim, hidden_dim=30):
@@ -222,42 +260,6 @@ class NetworkController(nn.Module):
         phi_pi_star = self.network(x_star)
         u = phi_pi#torch.clamp(phi_pi, u_min, u_max)# - phi_pi_star + u_star
         return u
-
-class GraphCouplingNN(nn.Module):
-    def __init__(self, d, N):
-        """
-        Neural network to learn an (N+1) x (N+1) coupling matrix with masking based on adjacency matrix G.
-        
-        Args:
-            d (int): Dimension of the input features.
-            N (int): Number of subsystems (excluding the extra node indexed at N+1).
-        """
-        super(GraphCouplingNN, self).__init__()
-        self.N = N
-        self.linear = nn.Linear(d, (N+1) * (N+1))  # Fully connected layer to output a flattened matrix
-        
-    def forward(self, x, G):
-        """
-        Forward pass to compute the masked nonnegative coupling matrix.
-        
-        Args:
-            x (torch.Tensor): Input feature tensor of shape (batch_size, d).
-            G (torch.Tensor): Adjacency matrix of shape (N+1, N+1), binary values {0,1}.
-        
-        Returns:
-            torch.Tensor: Masked and nonnegative coupling matrix of shape (N+1, N+1).
-        """
-        batch_size = x.shape[0]
-        raw_A = self.linear(x)  # Output shape: (batch_size, (N+1)*(N+1))
-        raw_A = raw_A.view(batch_size, self.N+1, self.N+1)  # Reshape to (batch_size, N+1, N+1)
-        
-        # Apply ReLU for nonnegativity
-        A_tilde = torch.relu(raw_A) 
-        
-        # Apply adjacency matrix mask (Hadamard product)
-        A_masked = A_tilde * G  # Elementwise multiplication
-        
-        return A_masked
 
 class system_network(nn.Module):
     def __init__(self, state_dim, hidden_dim=30):
@@ -454,6 +456,27 @@ class StringStabilityTrainer(pl.LightningModule):
         self.current_index = current_index
         self.original_controller = original_controller
         
+
+    def create_binary_adjacency_matrix(self, connections):
+        """
+        Convert connections dictionary to binary adjacency matrix
+        
+        Args:
+            connections (dict): Dictionary of connections {i: {j: weight}}
+        
+        Returns:
+            torch.Tensor: Binary adjacency matrix where 1 indicates connection exists
+        """
+        N = len(connections)  # number of vehicles
+        G = torch.zeros(N, N, device=self.device)
+        
+        # Convert weighted connections to binary (0/1) connections
+        for i in connections:
+            for j in connections[i]:
+                G[i, j] = 1
+        
+        return G
+    
     def vector_lyapunov_conditions(self, states, x_stars, disturbances):
         """
         Verify vector Lyapunov conditions for string stability
@@ -462,6 +485,12 @@ class StringStabilityTrainer(pl.LightningModule):
         x_stars: [batch_size, num_vehicles, 2]
         disturbances: [batch_size, num_vehicles]
         """
+        if_fixed_coupling = False
+        if if_fixed_coupling:
+            coupling_matrix = self.system.connections
+        else:
+            G = self.create_binary_adjacency_matrix(self.system.connections)
+            coupling_matrix = self.V_net.coupling_matrix(G)
         # Current Lyapunov values
         V_current = self.V_net(states, x_stars)
 
@@ -497,19 +526,28 @@ class StringStabilityTrainer(pl.LightningModule):
         
         # Compute Lyapunov decrease and larger or equal to zero conditions
         V_decreases = []
+        coef_cons = []
         #V_diff = torch.sum(nn.ReLU(V_current - beta))
+
         for i in range(1, states.shape[1]):  # Skip leading vehicle
             decrease = V_next[:,i-1] - V_current[:,i-1]
             # Add interconnection terms based on connection matrix
             decrease += 0.05 * V_current[:,i-1]
-            for j in self.system.connections[i]:
-                if j >= 1:
-                    decrease -= self.system.connections[i][j] * V_current[:,j-1]
+            coef_con = torch.tensor(-0.05, device=V_current.device, dtype=V_current.dtype)
+            if if_fixed_coupling:
+                for j in coupling_matrix[i]:
+                    if j >= 1:
+                        decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+            else:
+                for j in range(1, states.shape[1]):
+                    decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                    coef_con += coupling_matrix[i][j]
             # Add disturbance term
             #decrease -= torch.norm(disturbances[i])**2
             V_decreases.append(decrease)
+            coef_cons.append(coef_con)
             
-        return torch.stack(V_decreases), V_current, control_dist
+        return torch.stack(V_decreases), V_current, control_dist, torch.stack(coef_cons)
 
     def cal_reward_objective(self, states, x_stars, disturbances):
         """
@@ -558,15 +596,15 @@ class StringStabilityTrainer(pl.LightningModule):
 
         # Compute vector Lyapunov conditions
         epsilon = 1e-3
-        V_decreases, V_current, control_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
+        V_decreases, V_current, control_dist, coef_cons = self.vector_lyapunov_conditions(states, x_stars, disturbances)
 
         reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
 
         # Compute loss ensuring string stability conditions
         if self.current_index == 0:
-            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist
+            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + torch.relu(coef_cons).mean()
         else: 
-            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + reward_related_loss
+            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + reward_related_loss + 100*torch.relu(coef_cons+epsilon).mean()
         
         # Update networks
         opt.zero_grad()
@@ -585,11 +623,11 @@ class StringStabilityTrainer(pl.LightningModule):
         states, x_stars, disturbances = batch
         epsilon = 1e-3
         reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
-        V_decreases, V_current, control_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
+        V_decreases, V_current, control_dist, coef_cons = self.vector_lyapunov_conditions(states, x_stars, disturbances)
         if self.current_index == 0:
-            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist
+            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + torch.relu(coef_cons).mean()
         else: 
-            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + reward_related_loss
+            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + reward_related_loss + torch.relu(coef_cons).mean()    
         
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
