@@ -34,12 +34,12 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v58.ckpt')
+check_point = torch.load(f'model_weights/best_model-v96.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
 
 if if_load_pre_trained_model:
-    pre_trained_model = "pre_train_model/sac_platoon_99_actor.pth"
+    pre_trained_model = "pre_train_model/sac_platoon_60_actor.pth"
     raw_parameters = torch.load(pre_trained_model)
     controller_parameters = {}
     for k, v in raw_parameters.items():

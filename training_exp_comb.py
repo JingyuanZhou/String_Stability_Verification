@@ -190,7 +190,7 @@ class VectorLyapunovNetwork(nn.Module):
         return V
 
 class NetworkController(nn.Module):
-    def __init__(self, state_dim, control_dim, hidden_dim=128):
+    def __init__(self, state_dim, control_dim, hidden_dim=30):
         super().__init__()
         self.network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
@@ -222,6 +222,42 @@ class NetworkController(nn.Module):
         phi_pi_star = self.network(x_star)
         u = phi_pi#torch.clamp(phi_pi, u_min, u_max)# - phi_pi_star + u_star
         return u
+
+class GraphCouplingNN(nn.Module):
+    def __init__(self, d, N):
+        """
+        Neural network to learn an (N+1) x (N+1) coupling matrix with masking based on adjacency matrix G.
+        
+        Args:
+            d (int): Dimension of the input features.
+            N (int): Number of subsystems (excluding the extra node indexed at N+1).
+        """
+        super(GraphCouplingNN, self).__init__()
+        self.N = N
+        self.linear = nn.Linear(d, (N+1) * (N+1))  # Fully connected layer to output a flattened matrix
+        
+    def forward(self, x, G):
+        """
+        Forward pass to compute the masked nonnegative coupling matrix.
+        
+        Args:
+            x (torch.Tensor): Input feature tensor of shape (batch_size, d).
+            G (torch.Tensor): Adjacency matrix of shape (N+1, N+1), binary values {0,1}.
+        
+        Returns:
+            torch.Tensor: Masked and nonnegative coupling matrix of shape (N+1, N+1).
+        """
+        batch_size = x.shape[0]
+        raw_A = self.linear(x)  # Output shape: (batch_size, (N+1)*(N+1))
+        raw_A = raw_A.view(batch_size, self.N+1, self.N+1)  # Reshape to (batch_size, N+1, N+1)
+        
+        # Apply ReLU for nonnegativity
+        A_tilde = torch.relu(raw_A) 
+        
+        # Apply adjacency matrix mask (Hadamard product)
+        A_masked = A_tilde * G  # Elementwise multiplication
+        
+        return A_masked
 
 class system_network(nn.Module):
     def __init__(self, state_dim, hidden_dim=30):
@@ -407,7 +443,7 @@ class PlatoonDynamics(InterconnectedSystem):
         print("Neural dynamics training completed!")
 
 class StringStabilityTrainer(pl.LightningModule):
-    def __init__(self, V_net, controllers, system, current_index, learning_rate=1e-3):
+    def __init__(self, V_net, controllers, system, current_index, learning_rate=1e-3, original_controller=None):
         super().__init__()
         self.automatic_optimization = False
         # Save networks as module attributes so they're included in checkpoints
@@ -416,10 +452,12 @@ class StringStabilityTrainer(pl.LightningModule):
         self.system = system
         self.learning_rate = learning_rate
         self.current_index = current_index
+        self.original_controller = original_controller
         
     def vector_lyapunov_conditions(self, states, x_stars, disturbances):
         """
         Verify vector Lyapunov conditions for string stability
+        
         states: [batch_size, num_vehicles, 2]
         x_stars: [batch_size, num_vehicles, 2]
         disturbances: [batch_size, num_vehicles]
@@ -429,10 +467,12 @@ class StringStabilityTrainer(pl.LightningModule):
 
         # Compute control inputs
         controls = []
+        original_controls = []
         for i in range(states.shape[1]):
             state_i = states[:, i, :]
             x_star_i = x_stars[:, i, :]
             controller = self.controllers[i]
+            original_controller = self.original_controller[i]
             
             u_star = torch.zeros(1, device=states.device)
             u_bounds = (torch.tensor(-5.0, device=states.device), 
@@ -441,9 +481,14 @@ class StringStabilityTrainer(pl.LightningModule):
             if isinstance(controller, NetworkController):  # Check if it's a NetworkController
                 control = controller(states, x_stars, u_star, u_bounds)
                 controls.append(control)
+                original_control = original_controller(states, x_stars, u_star, u_bounds)
+                original_controls.append(original_control)
             else:
                 controls.append(None)
+                original_controls.append(None)
         
+        control_dist = torch.square(original_controls[1] - controls[1]).mean()
+
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
 
@@ -464,7 +509,7 @@ class StringStabilityTrainer(pl.LightningModule):
             #decrease -= torch.norm(disturbances[i])**2
             V_decreases.append(decrease)
             
-        return torch.stack(V_decreases), V_current
+        return torch.stack(V_decreases), V_current, control_dist
 
     def cal_reward_objective(self, states, x_stars, disturbances):
         """
@@ -513,15 +558,15 @@ class StringStabilityTrainer(pl.LightningModule):
 
         # Compute vector Lyapunov conditions
         epsilon = 1e-3
-        V_decreases, V_current = self.vector_lyapunov_conditions(states, x_stars, disturbances)
+        V_decreases, V_current, control_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
 
         reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
 
         # Compute loss ensuring string stability conditions
         if self.current_index == 0:
-            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean()
+            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist
         else: 
-            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + reward_related_loss
+            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + reward_related_loss
         
         # Update networks
         opt.zero_grad()
@@ -540,11 +585,11 @@ class StringStabilityTrainer(pl.LightningModule):
         states, x_stars, disturbances = batch
         epsilon = 1e-3
         reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
-        V_decreases, V_current = self.vector_lyapunov_conditions(states, x_stars, disturbances)
+        V_decreases, V_current, control_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
         if self.current_index == 0:
-            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean()
+            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist
         else: 
-            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + reward_related_loss
+            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + reward_related_loss
         
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
@@ -558,7 +603,7 @@ class StringStabilityTrainer(pl.LightningModule):
         # Add V_net parameters
         parameters.extend(self.V_net.parameters())
         
-        if self.current_index > 20:
+        if self.current_index > 0:
             # Add controller parameters using index
             for i in range(len(self.controllers)):
                 if self.controllers[i] is not None and hasattr(self.controllers[i], 'parameters'):
@@ -740,7 +785,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
 
     # Initialize trainer
     trainer = StringStabilityTrainer(V_net, controllers, system, 
-                                   learning_rate=learning_rate, current_index = index)
+                                   learning_rate=learning_rate, current_index = index, original_controller = controllers)
 
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
@@ -873,7 +918,7 @@ def add_noise_to_counterexamples(counterexamples):
 def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params,
                  counterexamples, counterexample_ranges, epoch,
                  in_model, in_controller,
-                 learning_rate=1e-4, batch_size=32, system_dynamics_network=None, index = 0):
+                 learning_rate=1e-4, batch_size=32, system_dynamics_network=None, index = 0, pre_trained_model = None):
     """
     Retrain the platoon control system using counterexamples
     
@@ -918,9 +963,29 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_
         batch_size=batch_size
     )
 
+    original_controllers = nn.ModuleList([
+        NetworkController(sum(state_dims), control_dims[i]) if i in cav_indices 
+        else nn.Identity() for i in range(num_vehicles)
+    ])
+    if pre_trained_model is not None:
+        raw_parameters = torch.load(pre_trained_model)
+        controller_parameters = {}
+        for k, v in raw_parameters.items():
+            if k.startswith('trunk'):
+                new_key = k.replace('trunk', '1.network')
+                # 如果是最后一层的参数，只取一半（对应均值输出）
+
+                if '1.network.4.weight' in new_key:  
+                    controller_parameters[new_key] = v[:1, :]  # 只保留第一行，对应均值
+                elif '1.network.4.bias' in new_key:
+                    controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
+                else:
+                    controller_parameters[new_key] = v
+        original_controllers.load_state_dict(controller_parameters)
+
     # Initialize trainer for retraining
     trainer = StringStabilityTrainer(V_net, controllers, system, 
-                                learning_rate=learning_rate, current_index = index)
+                                learning_rate=learning_rate, current_index = index, original_controller = original_controllers)
     #trainer = StringStabilityTrainerRetrain(
     #    V_net, controllers,
     #    primal_learning_rate=learning_rate
