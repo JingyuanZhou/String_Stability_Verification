@@ -34,7 +34,7 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v96.ckpt')
+check_point = torch.load(f'model_weights/best_model-v37.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
 
@@ -92,7 +92,8 @@ disturbances = torch.zeros((batch_size, num_vehicles))
 with torch.no_grad():
     for t in range(time_steps):
         # 为领头车添加正弦扰动
-        disturbances[:, 0] = 3.0 * torch.sin(torch.tensor(2 * np.pi * t / 50))  # 振幅2.0，周期50步
+        if t<=100:
+            disturbances[:, 0] = 3.0 * torch.sin(torch.tensor(2 * np.pi * t / 50))  # 振幅2.0，周期50步
         
         # 计算控制输入
         controls = []
