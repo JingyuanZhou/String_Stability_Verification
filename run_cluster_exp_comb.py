@@ -4,6 +4,8 @@ import os
 from datetime import datetime
 from generate_combined_model_torch_comb import combined_model
 from queries_comb import safe_descent_cond_check
+import warnings
+warnings.filterwarnings("ignore")
 
 # Create output directories
 out_folders = ["controllers/", "models/", "data/", "combined/", "counterexamples/", "model_weights/"]
@@ -25,8 +27,8 @@ dynamics_params = {
     'v_max': 30.0,
     's_st': 5.0,
     's_go': 35.0,
-    'a_max': 7.0,
-    'a_min': -7.0,
+    'a_max': 100.0,
+    'a_min': -100.0,
     'desired_spacing': 20.0
 }
 
@@ -41,7 +43,7 @@ max_iters = 10000
 index = 0
 out_comb_folders = "combined/"
 cur_comb_file = out_comb_folders + f"combined_{index}.onnx"
-pre_trained_id = 60
+pre_trained_id = 90
 pre_trained_model = f"pre_train_model/sac_platoon_{pre_trained_id}_actor.pth"
 pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
 
@@ -88,9 +90,9 @@ while (len(ret) > 0) and (index < max_iters):
 
     st_train_time = datetime.now()
     controllers, system, V_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 
-                                               control_dims=control_dims, dynamics_params=dynamics_params, counterexamples=torch.Tensor(ret), 
+                                               control_dims=control_dims, in_system=system, counterexamples=torch.Tensor(ret), 
                                                counterexample_ranges=ret_ranges, epoch=num_epochs, in_model= V_net, 
-                                               in_controller = controllers, index = index, pre_trained_model=pre_trained_model, pre_trained_critics = pre_trained_critics)
+                                               in_controller = controllers, index = index, pre_trained_model=pre_trained_model, pre_trained_critics = pre_trained_critics, combined_model_path=cur_comb_file)
     end_train_time = datetime.now()
     diff = end_train_time - st_train_time
     print("Total training time for model index", str(index), ":", str(diff.seconds))

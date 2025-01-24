@@ -1,8 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from training_exp_comb import PlatoonDynamics, NetworkController, VectorLyapunovNetwork, system_network
+from training_exp_comb import PlatoonDynamics
 import torch.nn as nn
+from networks import NetworkController, system_network, DoubleQCritic, VectorLyapunovNetwork, system_network
 
 # 初始化系统参数
 num_vehicles = 3
@@ -34,12 +35,12 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v37.ckpt')
+check_point = torch.load(f'model_weights/best_model-v396.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
-
+pre_trained_id = 90
 if if_load_pre_trained_model:
-    pre_trained_model = "pre_train_model/sac_platoon_60_actor.pth"
+    pre_trained_model = f"pre_train_model/sac_platoon_{pre_trained_id}_actor.pth"
     raw_parameters = torch.load(pre_trained_model)
     controller_parameters = {}
     for k, v in raw_parameters.items():
@@ -72,6 +73,12 @@ controllers = nn.ModuleList([
 #print("controllers", controllers)
 controllers.load_state_dict(controller_parameters)
 controllers.eval()
+
+critics = DoubleQCritic(6, 1)
+pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
+if pre_trained_critics is not None:
+    raw_parameters_critics = torch.load(pre_trained_critics)
+    critics.load_state_dict(raw_parameters_critics)
 
 # 初始化状态
 batch_size = 1
@@ -193,6 +200,67 @@ fig.colorbar(surf, ax=ax, shrink=0.5, aspect=10)
 
 plt.title('Lyapunov Function - Surface Plot')
 plt.legend()
-plt.show()
 
-        
+
+# Create a contour plot for the Lyapunov function
+fig, ax = plt.subplots(figsize=(8, 6))
+contour = ax.contourf(X, Y, Z, cmap='viridis')
+
+
+
+
+values_new_controller = np.zeros((len(spacing_space), len(velocity_space)))
+value_origin_controller = np.zeros((len(spacing_space), len(velocity_space)))
+
+pre_trained_model = "pre_train_model/sac_platoon_90_actor.pth"
+raw_parameters = torch.load(pre_trained_model)
+original_controller_parameters = {}
+for k, v in raw_parameters.items():
+    if k.startswith('trunk'):
+        new_key = k.replace('trunk', '1.network')
+        # 如果是最后一层的参数，只取一半（对应均值输出）
+
+        if '1.network.4.weight' in new_key:  
+            original_controller_parameters[new_key] = v[:1, :]  # 只保留第一行，对应均值
+        elif '1.network.4.bias' in new_key:
+            original_controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
+        else:
+            original_controller_parameters[new_key] = v
+
+original_controllers = nn.ModuleList([
+    NetworkController(6, 1) if i in cav_indices  # state_dim=2, control_dim=1
+    else nn.Identity() for i in range(num_vehicles)
+])
+original_controllers.load_state_dict(original_controller_parameters)
+
+for i, s in enumerate(spacing_space):
+    for j, v in enumerate(velocity_space):
+        sample_x = torch.tensor([[20.0, 15.0,s, v, 20.0, 15.0]],dtype=torch.float32)
+
+        x_star = torch.tensor([[20.0, 15.0]*3],dtype=torch.float32)
+        u_star = torch.zeros(1)
+        u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
+        new_controller = controllers[1](sample_x, x_star, u_star, u_bounds)
+        origin_controller = original_controllers[1](sample_x, x_star, u_star, u_bounds)
+        values_new_controller[i,j] = critics(sample_x, new_controller).item()
+        value_origin_controller[i,j] = critics(sample_x, origin_controller).item()
+
+fig = plt.figure(figsize=(8, 6))
+ax = fig.add_subplot(111, projection='3d')
+
+# Create the surface plot
+surf_1 = ax.plot_surface(X, Y, values_new_controller-value_origin_controller, cmap='viridis') #values_new_controller-value_origin_controller
+
+
+# Label axes
+ax.set_xlabel('Spacing (m)')
+ax.set_ylabel('Velocity (m/s)')
+ax.set_zlabel('Q-value difference')
+
+# Add a colorbar
+fig.colorbar(surf_1, ax=ax, shrink=0.5, aspect=10)
+
+plt.title('Q-value - Surface Plot')
+#plt.legend(['New Controller', 'Original Controller'])
+
+plt.show()

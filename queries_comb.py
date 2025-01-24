@@ -30,14 +30,11 @@ class VerificationQuery:
         current_state = network.inputVars[0][0]
         
         # 网络输出包含: [控制输出, V_1(x_t),...,V_{n-1}(x_t), x_{t+1}, V_1(x_{t+1}),...,V_{n-1}(x_{t+1})]
-        #print(network.outputVars)
         v_current = network.outputVars[0][0]
-        #print("v_current", v_current)
         next_state = network.outputVars[1]
         v_next = network.outputVars[2][0]
 
         #print("current_state", current_state)
-        #print("acceleration", acceleration)
         #print("v_current", v_current)
         #print("next_state", next_state)
         #print("v_next", v_next)
@@ -79,7 +76,7 @@ class VerificationQuery:
         #current_state, v_current = self.run_unroll(network)
 
         # ========== 1) 设置输入上下界，包含头车固定到平衡态的示例 ========== 
-        # 假设 "头车(Agent=0)" 的 equilibrium spacing = 0, equilibrium velocity = 15
+        # 假设 "头车(Agent=0)" 的 equilibrium spacing = 20, equilibrium velocity = 15
         # 你可根据实际需要修改
         eq_spacing = 20.0
         eq_velocity = 15.0
@@ -91,14 +88,11 @@ class VerificationQuery:
                 # current_state[0][0] -> spacing_头车
                 # current_state[0][1] -> velocity_头车
                 # next_state[0][0], next_state[0][1] 同理
-                for var_idx in [
-                    current_state[agent_id][0],
-                    current_state[agent_id][1],
-                    #next_state[agent_id][0],
-                    #next_state[agent_id][1]
-                ]:
-                    network.setLowerBound(var_idx, eq_spacing if (var_idx % 2 == 0) else eq_velocity)
-                    network.setUpperBound(var_idx, eq_spacing if (var_idx % 2 == 0) else eq_velocity)
+
+                network.setLowerBound(current_state[agent_id][0], eq_spacing)
+                network.setUpperBound(current_state[agent_id][0], eq_spacing)
+                network.setLowerBound(current_state[agent_id][1], eq_velocity)
+                network.setUpperBound(current_state[agent_id][1], eq_velocity)
                 # control_output
             else:
                 # 对后续车辆按照 input_bounds 给出的范围设置
@@ -113,6 +107,10 @@ class VerificationQuery:
                 network.setLowerBound(current_state[agent_id][1], vel_lo)
                 network.setUpperBound(current_state[agent_id][1], vel_hi)
 
+                #print("current_state[agent_id][0]", current_state[agent_id][0], "sp_lo", sp_lo, "sp_hi", sp_hi)
+                #print("current_state[agent_id][1]", current_state[agent_id][1], "vel_lo", vel_lo, "vel_hi", vel_hi)
+                
+
         # ========== 2) 添加“李雅普诺夫函数下降”约束 ========== 
         # 假设 num_lyap = num_agents - 1，对应第 1 ~ (num_agents-1) 这几辆车
         # 下面只演示1个Lyapunov对每辆车的情况，如果你每辆车都输出了不同的 V_current[i], V_next[i],
@@ -125,29 +123,29 @@ class VerificationQuery:
             network.setLowerBound(v_current[i], 0.0)
             network.setLowerBound(v_next[i], 0.0)
 
+
             # Descent constraint
-            
             aii = 0.05
             epsilon = 0.0
             vars = [v_next[i], v_current[i]]
             coeffs = [1.0, -1.0 + aii]  # Coefficients for v_next[i] and v_current[i]
 
             # Add coefficients for system.connections[i+1]
+
             for j in self.system.connections[i+1]:
                 if j >= 1:
                     vars.append(v_current[j-1])  # Add v_current[j-1] variable
                     coeffs.append(-self.system.connections[i+1][j])  # Corresponding coefficient
-
             # Add the inequality to the network
             network.addInequality(
                 vars=vars,
                 coeffs=coeffs,
                 scalar=epsilon
             )
-            
 
+        
+        #network.saveQuery("query_1.txt")
 
-        # ========== 3) 调用 Marabou solver 验证 ========== 
         exitCode, vals, stats = network.solve(options=options, verbose=False)
 
         if exitCode == "sat":
@@ -157,6 +155,11 @@ class VerificationQuery:
                 spacing_val = vals[current_state[agent_id][0]]
                 velocity_val = vals[current_state[agent_id][1]]
                 counterexample.append([spacing_val, velocity_val])
+            lya_1 = [vals[v_current[0]], vals[v_next[0]]]
+            lya_2 = [vals[v_current[1]], vals[v_next[1]]]
+            solved_next_state = [vals[next_state[i]] for i in range(6)]
+
+            print("counter_example", counterexample, "solved_next_state", solved_next_state,"lyapunov_1", lya_1, "lyapunov_2", lya_2)
             return counterexample  # 多维列表
         elif exitCode == "unsat":
             # 不可满足 => 不存在反例 => 安全
@@ -190,9 +193,10 @@ def safe_descent_cond_check(
     # 假设我们希望在 [0, limit_pos]、[0, vel_limit] 范围各划分 5 等份
     # => spacing_space: [0, 10, 20, 30, 40], velocity_space: [0, 7.5, 15, 22.5, 30]
     # => 4 个区间(因为有5个端点)
-    split_num = 13
+    split_num = 76
     spacing_space = np.linspace(5, 35, split_num)
-    velocity_space = np.linspace(2, vel_limit, split_num)
+    velocity_space = np.linspace(10, vel_limit, split_num)
+
 
     # 3) 存储验证结果
     vals_found = []       # 用来记录找到的反例
@@ -200,51 +204,97 @@ def safe_descent_cond_check(
     failed_vals = []      # 记录 timeout/error 等情况
 
     # 4) 两重循环: i in [0..3], k in [0..3] => 16个 (spacing, velocity) 区间
-    for i in range(len(spacing_space) - 1):   # 0..3
-        for k in range(len(velocity_space) - 1):  # 0..3
-            for agent in range(1,num_agents):
-                # 为 num_agents=3, 构造 input_bounds
-                # agent=0 会在 check_descent() 里固定，所以这里只要给 agent=0 占位即可
-                # agent=1,2 用实际区间
-                # 结构: [ [sp_min_0, sp_max_0], [vel_min_0, vel_max_0],
-                #         [sp_min_1, sp_max_1], [vel_min_1, vel_max_1],
-                #         [sp_min_2, sp_max_2], [vel_min_2, vel_max_2] ]
-                # 但头车(0)固定 => 可以给一个“fake”区间(后面不使用)
-                if agent == 1:
-                    state_bounds = [
-                        [20, 20],   # spacing_头车
-                        [15, 15],   # velocity_头车
-                        # agent=1
-                        [round(spacing_space[i], 2),   round(spacing_space[i+1], 2)],
-                        [round(velocity_space[k], 2),  round(velocity_space[k+1], 2)],
-                        # agent=2
-                        [5, 35],
-                        [2, vel_limit]
-                    ]
-                elif agent == 2:
-                    state_bounds = [
-                        [20, 20],   # spacing_头车
-                        [15, 15],   # velocity_头车
-                        # agent=1
-                        [5, 35],
-                        [2, vel_limit],
-                        # agent=2
-                        [round(spacing_space[i], 2),   round(spacing_space[i+1], 2)],
-                        [round(velocity_space[k], 2),  round(velocity_space[k+1], 2)]
-                    ]
+    
+    for agent in range(1,num_agents):
+        for i in range(len(spacing_space) - 1):   # 0..3
+            # 为 num_agents=3, 构造 input_bounds
+            # agent=0 会在 check_descent() 里固定，所以这里只要给 agent=0 占位即可
+            # agent=1,2 用实际区间
+            # 结构: [ [sp_min_0, sp_max_0], [vel_min_0, vel_max_0],
+            #         [sp_min_1, sp_max_1], [vel_min_1, vel_max_1],
+            #         [sp_min_2, sp_max_2], [vel_min_2, vel_max_2] ]
+            # 但头车(0)固定 => 可以给一个“fake”区间(后面不使用)
+            if agent == 1:
+                state_bounds = [
+                    [20, 20],   # spacing_头车
+                    [15, 15],   # velocity_头车
+                    # agent=1
+                    [round(spacing_space[i], 2),   round(spacing_space[i+1], 2)],
+                    [10, vel_limit],
+                    #[round(velocity_space[k], 2),  round(velocity_space[k+1], 2)],
+                    # agent=2
+                    [5, 35],
+                    [10, vel_limit]
+                ]
+            elif agent == 2:
+                state_bounds = [
+                    [20, 20],   # spacing_头车
+                    [15, 15],   # velocity_头车
+                    # agent=1
+                    [5, 35],
+                    [10, vel_limit],
+                    # agent=2
+                    [round(spacing_space[i], 2),   round(spacing_space[i+1], 2)],
+                    [10, vel_limit],
+                    #[round(velocity_space[k], 2),  round(velocity_space[k+1], 2)]
+                ]
 
-                # 调用 check_descent 
-                ans = query.check_descent(state_bounds)
-                
-                # 根据返回值分类
-                if isinstance(ans, list) and len(ans) > 1:
-                    # sat => ans 是反例
-                    vals_found.append(ans)
-                    val_ranges.append(state_bounds)
-                elif ans[0] == -1:
-                    # 其他错误 or 超时
-                    failed_vals.append(ans)
-                # 如果 ans = [1], 表示 "unsat" => 这一块区间无反例
+            # 调用 check_descent 
+            ans = query.check_descent(state_bounds)
+            
+            # 根据返回值分类
+            if isinstance(ans, list) and len(ans) > 1:
+                # sat => ans 是反例
+                vals_found.append(ans)
+                val_ranges.append(state_bounds)
+            elif ans[0] == -1:
+                # 其他错误 or 超时
+                failed_vals.append(ans)
+            # 如果 ans = [1], 表示 "unsat" => 这一块区间无反例
+
+        for k in range(len(velocity_space) - 1):  # 0..3
+            # 为 num_agents=3, 构造 input_bounds
+            # agent=0 会在 check_descent() 里固定，所以这里只要给 agent=0 占位即可
+            # agent=1,2 用实际区间
+            # 结构: [ [sp_min_0, sp_max_0], [vel_min_0, vel_max_0],
+            #         [sp_min_1, sp_max_1], [vel_min_1, vel_max_1],
+            #         [sp_min_2, sp_max_2], [vel_min_2, vel_max_2] ]
+            # 但头车(0)固定 => 可以给一个“fake”区间(后面不使用)
+            if agent == 1:
+                state_bounds = [
+                    [20, 20],   # spacing_头车
+                    [15, 15],   # velocity_头车
+                    # agent=1
+                    [5, 35],
+                    [round(velocity_space[k], 2),  round(velocity_space[k+1], 2)],
+                    # agent=2
+                    [5, 35],
+                    [10, vel_limit]
+                ]
+            elif agent == 2:
+                state_bounds = [
+                    [20, 20],   # spacing_头车
+                    [15, 15],   # velocity_头车
+                    # agent=1
+                    [5, 35],
+                    [10, vel_limit],
+                    # agent=2
+                    [5, 35],
+                    [round(velocity_space[k], 2),  round(velocity_space[k+1], 2)]
+                ]
+
+            # 调用 check_descent 
+            ans = query.check_descent(state_bounds)
+            
+            # 根据返回值分类
+            if isinstance(ans, list) and len(ans) > 1:
+                # sat => ans 是反例
+                vals_found.append(ans)
+                val_ranges.append(state_bounds)
+            elif ans[0] == -1:
+                # 其他错误 or 超时
+                failed_vals.append(ans)
+            # 如果 ans = [1], 表示 "unsat" => 这一块区间无反例
 
 
     found_count = len(vals_found)     # 有反例的次数
@@ -262,7 +312,13 @@ def safe_descent_cond_check(
     return vals_found, val_ranges, verification_result
 
 if __name__ == "__main__":
-    x_star = [20, 15]  # 目标状态：spacing=0, velocity=0
-    vals, ranges, failed = safe_descent_cond_check("/home/zhoujy53/Desktop/String_Stability_Verification/combined/combined_0.onnx", num_agents=3)
-    print(f"Verification result: {'fail' if failed else 'succeed'}")
+    cur_comb_file = "combined/combined_0.onnx"
+    network = Marabou.read_onnx(cur_comb_file)
+
+    inputs = np.array([[20.0, 15.0], [5.0, 10.0], [10.2, 10.0]])
+    outputsMarabou = network.evaluateWithMarabou([inputs])
+    network.saveQuery("query_2.txt")
+    outputWMarabou = network.evaluateWithoutMarabou([inputs])
+    print("outputsMarabou", outputsMarabou)
+    print("evaluateWithoutMarabou", outputWMarabou)
 

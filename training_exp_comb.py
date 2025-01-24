@@ -5,6 +5,7 @@ from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 from lightning.pytorch.callbacks import ModelCheckpoint
 from networks import NetworkController, VectorLyapunovNetwork, system_network, DoubleQCritic
+import torch.onnx
 
 class InterconnectedSystem:
     def __init__(self, dynamics_params, connection_matrix):
@@ -46,8 +47,8 @@ class PlatoonDynamics(InterconnectedSystem):
         self.v_max = dynamics_params.get('v_max', 30.0)
         self.s_st = dynamics_params.get('s_st', 5.0)
         self.s_go = dynamics_params.get('s_go', 35.0)
-        self.a_max = dynamics_params.get('a_max', 7.0)
-        self.a_min = dynamics_params.get('a_min', -7.0)
+        self.a_max = dynamics_params.get('a_max', 100.0)
+        self.a_min = dynamics_params.get('a_min', -100.0)
         self.if_neural_network = if_neural_network
         if self.if_neural_network:
             self.neural_system = neural_system
@@ -85,7 +86,7 @@ class PlatoonDynamics(InterconnectedSystem):
         
         return acc
     
-    def next_state(self, states, controls, disturbances, eval = True):
+    def next_state(self, states, controls, disturbances, eval = False):
         """
         Compute next states for all vehicles in platoon
         states: tensor of shape [batch_size, num_vehicles, 2]
@@ -110,6 +111,7 @@ class PlatoonDynamics(InterconnectedSystem):
                 acc_i = controls[i]  # [batch_size, 1]
             else:  # HDV
                 acc_i = self._compute_hdv_acceleration(states[:,i,:], states[:,i-1,:], eval)
+                #print("true_acc_i", acc_i)
                 if not self.if_neural_network:
                     acc_i = acc_i.unsqueeze(-1)  # [batch_size, 1]
             
@@ -180,7 +182,6 @@ class StringStabilityTrainer(pl.LightningModule):
         self.original_controller = original_controller
         self.critics = critics
         
-
     def create_binary_adjacency_matrix(self, connections):
         """
         Convert connections dictionary to binary adjacency matrix
@@ -240,8 +241,8 @@ class StringStabilityTrainer(pl.LightningModule):
                 controls.append(None)
                 original_controls.append(None)
         
-        control_dist = torch.square(original_controls[1] - controls[1]).mean()
-        value_dist = torch.square(self.critics(states, controls[1]) - self.critics(states, original_controls[1])).mean()/100
+        control_dist = torch.square(original_controls[1] - controls[1]).mean()/5000
+        value_dist = torch.relu(-(self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()
 
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
@@ -327,9 +328,9 @@ class StringStabilityTrainer(pl.LightningModule):
 
         # Compute loss ensuring string stability conditions
         if self.current_index == 0:
-            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + value_dist + torch.relu(coef_cons).mean()
+            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + value_dist + 100*torch.relu(coef_cons+epsilon).mean()
         else: 
-            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + value_dist + reward_related_loss + 100*torch.relu(coef_cons+epsilon).mean()
+            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + value_dist + reward_related_loss + 100*torch.relu(coef_cons+epsilon).mean()
         
         # Update networks
         opt.zero_grad()
@@ -350,9 +351,9 @@ class StringStabilityTrainer(pl.LightningModule):
         reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
         V_decreases, V_current, control_dist, coef_cons, value_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
         if self.current_index == 0:
-            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + value_dist + torch.relu(coef_cons).mean()
+            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() +control_dist+ value_dist + torch.relu(coef_cons).mean()
         else: 
-            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
+            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() +control_dist+ value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
         
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
@@ -577,6 +578,29 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     controllers = trainer.controllers
     V_net = trainer.V_net
 
+    # Update system connections
+    # Convert current dictionary connections to a binary adjacency matrix
+    G = torch.zeros(len(system.connections), len(system.connections))
+    for i in system.connections:
+        for j in system.connections[i]:
+            G[i, j] = 1.0
+    
+    # Compute new coupling matrix using V_net
+    new_matrix = V_net.coupling_matrix(G)
+    
+    # Convert new_matrix back to dictionary form
+    new_connections = {}
+    for i in range(new_matrix.size(0)):
+        new_connections[i] = {}
+        for j in range(new_matrix.size(1)):
+            val = new_matrix[i, j].item()
+            if abs(val) > 1e-9:
+                new_connections[i][j] = val
+
+    print("Old connections: ", system.connections)
+    print("New connections: ", new_connections)
+    system.connections = new_connections
+
     return controllers, system, V_net
 
 class PlatoonDataModuleRetrain(pl.LightningDataModule):
@@ -626,9 +650,12 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
     def val_dataloader(self):
         return DataLoader(self.val_dataset, batch_size=self.batch_size)
 
-def check_counter_examples(V_net, controllers, system, cav_indices, counterexamples):
+def check_counter_examples(V_net, controllers, system, cav_indices, counterexamples,combined_model_path):
     # check if the counterexamples are really counterexamples
     number_of_false_counterexamples = 0
+    
+    combined_model = torch.load(combined_model_path.replace(".onnx", ".pth"))
+
     for i in range(counterexamples.shape[0]):
 
         state = counterexamples[i]
@@ -636,7 +663,7 @@ def check_counter_examples(V_net, controllers, system, cav_indices, counterexamp
         x_star[...,0] = 20.0
         x_star[...,1] = 15.0
         disturbances = torch.zeros_like(state[0])
-        V_values = V_net(state, x_star)
+        V_values = V_net(state, x_star)[0]
         controls = []
         for j in range(state.shape[0]):
             if j in cav_indices:
@@ -649,14 +676,29 @@ def check_counter_examples(V_net, controllers, system, cav_indices, counterexamp
                 controls.append(None)
         
         next_states = system.next_state(state.unsqueeze(0), controls, disturbances.unsqueeze(0))
-        V_next = V_net(next_states, x_star)
+        cmb_output_V, cmb_next_state, cmb_next_V = combined_model(state)
+        #print("true_current_state:",state," true_next_state: ", next_states, "cmb_next_state: ", cmb_next_state)
+        #print("true_current_V:", V_values, " true_next_V: ", V_net(next_states, x_star)[0], "cmb_next_V: ", cmb_next_V)
+        V_next = V_net(next_states, x_star)[0]
+        False_ce = False
+        for i in range(V_next.size(0)):
+            aii = 0.05
+            epsilon = 0.0
+            vars_ = [V_next[i].item(), V_values[i].item()]
+            coeffs = [1.0, -1.0 + aii]
 
+            for j in system.connections[i+1]:
+                if j >= 1:
+                    vars_.append(V_values[j-1].item())
+                    coeffs.append(-system.connections[i+1][j])
 
-        if torch.all(V_next - 0.95*V_values <= 0) and torch.all(V_values >= 0):
-            #print("Counterexample is not a counterexample!")
-            #print("V_next: ", V_next)
-            #print("V_values: ", V_values)
+            expr = sum(v * c for v, c in zip(vars_, coeffs))
+            if expr <= epsilon and V_values[i] >= 0.0 and V_next[i] >= 0.0:
+                False_ce = True
+                #print(f"vars: {[round(v, 3) for v in vars_]}, coeffs: {[round(c, 3) for c in coeffs]}, expr: {round(expr, 3)}")
+        if False_ce:
             number_of_false_counterexamples += 1
+
     if number_of_false_counterexamples == 0:
         print("All counterexamples are valid!")
     else:
@@ -684,10 +726,10 @@ def add_noise_to_counterexamples(counterexamples):
     print("expanded counterexamples: ", counter_example_expanded.shape)
     return counter_example_expanded
 
-def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params,
+def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system,
                  counterexamples, counterexample_ranges, epoch,
                  in_model, in_controller,
-                 learning_rate=1e-4, batch_size=32, system_dynamics_network=None, index = 0, pre_trained_model = None, pre_trained_critics = None):
+                 learning_rate=1e-4, batch_size=32, index = 0, pre_trained_model = None, pre_trained_critics = None, combined_model_path = None):
     """
     Retrain the platoon control system using counterexamples
     
@@ -712,19 +754,16 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_
         V_net (VectorLyapunovNetwork): Retrained Lyapunov network
     """
     # Create connection matrix
-    connection_matrix = create_platoon_connections(num_vehicles, cav_indices)
+    #connection_matrix = create_platoon_connections(num_vehicles, cav_indices)
 
     # Use provided networks directly
     V_net = in_model
     controllers = in_controller
 
     # Initialize system dynamics
-    if system_dynamics_network is not None:
-        system = PlatoonDynamics(dynamics_params, connection_matrix, if_neural_network=True, neural_system=system_dynamics_network)
-    else:
-        system = PlatoonDynamics(dynamics_params, connection_matrix)
+    system = in_system
 
-    check_counter_examples(V_net, controllers, system, cav_indices, counterexamples)
+    check_counter_examples(V_net, controllers, system, cav_indices, counterexamples, combined_model_path)
     counterexamples = add_noise_to_counterexamples(counterexamples)
     # Initialize data module with counterexamples
     data_module = PlatoonDataModuleRetrain(
@@ -786,6 +825,30 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_
     pl_trainer.fit(trainer, data_module)
     controllers = trainer.controllers
     V_net = trainer.V_net
+
+        # Update system connections
+    # Convert current dictionary connections to a binary adjacency matrix
+    G = torch.zeros(len(system.connections), len(system.connections))
+    for i in system.connections:
+        for j in system.connections[i]:
+            G[i, j] = 1.0
+    
+    # Compute new coupling matrix using V_net
+    new_matrix = V_net.coupling_matrix(G)
+    
+    # Convert new_matrix back to dictionary form
+    new_connections = {}
+    for i in range(new_matrix.size(0)):
+        new_connections[i] = {}
+        for j in range(new_matrix.size(1)):
+            val = new_matrix[i, j].item()
+            if abs(val) > 1e-9:
+                new_connections[i][j] = val
+
+    print("Old connections: ", system.connections)
+    print("New connections: ", new_connections)
+    system.connections = new_connections
+
     
     return controllers, system, V_net
 

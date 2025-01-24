@@ -13,7 +13,7 @@ class GraphCouplingMatrix(nn.Module):
         super(GraphCouplingMatrix, self).__init__()
         self.N = N
         # 直接定义一个可学习的参数矩阵
-        self.coupling_matrix = nn.Parameter(torch.zeros(N, N))
+        self.coupling_matrix = nn.Parameter(torch.zeros(N, N), requires_grad=True)
         self.reset_parameters()
         
     def reset_parameters(self):
@@ -71,7 +71,8 @@ class VectorLyapunovNetwork(nn.Module):
 
         W2[2*self.one_state_dim, 0] = 1
         W2[2*self.one_state_dim+1, 1] = 1
-        W_star[0:self.one_state_dim, torch.arange(self.one_state_dim)] = 1
+        W_star[0, 0] = 1
+        W_star[1, 1] = 1
 
         self.register_buffer('W1', W1)
         self.register_buffer('W2', W2)
@@ -157,7 +158,7 @@ class NetworkController(nn.Module):
         x_star = x_star @ self.W_change_state_position
         phi_pi = self.network(x)
         phi_pi_star = self.network(x_star)
-        u = phi_pi#torch.clamp(phi_pi, u_min, u_max)# - phi_pi_star + u_star
+        u = phi_pi- phi_pi_star #torch.clamp(phi_pi, u_min, u_max)# + u_star
         return u
 
 class system_network(nn.Module):
@@ -180,6 +181,7 @@ class system_network(nn.Module):
         """
         x = x.reshape(-1, self.state_dim)
         a = self.network(x)
+        #a = torch.clip(a, -5.0, 5.0)
         return a
     
 def orthogonal_init(layer):
