@@ -13,11 +13,11 @@ Branching heuristics set to LargestInterval
 
 Engine::solve: Initial statistics
 
-23:24:12 Statistics update:
+22:44:31 Statistics update:
 	--- Time Statistics ---
 	Total time elapsed: 12 milli (00:00:00)
 		Main loop: 0 milli (00:00:00)
-		Preprocessing time: 11 milli (00:00:00)
+		Preprocessing time: 12 milli (00:00:00)
 		Unknown: 0 milli (00:00:00)
 	Breakdown for main loop:
 		[0.00%] Simplex steps: 0 milli
@@ -92,11 +92,11 @@ Engine::solve: Initial statistics
 
 Engine::solve: sat assignment found
 
-23:24:12 Statistics update:
+22:44:31 Statistics update:
 	--- Time Statistics ---
 	Total time elapsed: 16 milli (00:00:00)
 		Main loop: 4 milli (00:00:00)
-		Preprocessing time: 11 milli (00:00:00)
+		Preprocessing time: 12 milli (00:00:00)
 		Unknown: 0 milli (00:00:00)
 	Breakdown for main loop:
 		[0.00%] Simplex steps: 0 milli
@@ -109,10 +109,10 @@ Engine::solve: sat assignment found
 		[0.00%] Valid case splits: 0 milli. Average per split: 0.00 milli
 		[0.00%] Applying stored bound-tightening: 0 milli
 		[0.00%] SMT core: 0 milli
-		[212.23%] Symbolic Bound Tightening: 8 milli
+		[214.17%] Symbolic Bound Tightening: 9 milli
 		[0.00%] SoI-based local search: 0 milli
 		[0.00%] SoI-based local search: 0 milli
-		[438164942368397760.00%] Unaccounted for: 0 milli
+		[433531000557216128.00%] Unaccounted for: 0 milli
 	--- Preprocessor Statistics ---
 	Number of preprocessor bound-tightening loop iterations: 6
 	Number of eliminated variables: 1133

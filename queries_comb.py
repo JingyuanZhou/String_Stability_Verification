@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 import numpy as np
+import torch
 
 # import Marabou.maraboupy import Marabou
 # from Marabou.maraboupy import MarabouCore
@@ -116,15 +117,37 @@ class VerificationQuery:
         # 下面只演示1个Lyapunov对每辆车的情况，如果你每辆车都输出了不同的 V_current[i], V_next[i],
         # 需要做更加细粒度的索引处理
         # 这里只做一个演示，示意如何写不等式
-
+        disjunction = []
         for i in range(self.num_lyap):
             # Positive constraint: v_current[i] >= 0
 
-            network.setLowerBound(v_current[i], 0.0)
-            network.setLowerBound(v_next[i], 0.0)
+            ineq1 = MarabouUtils.Equation(MarabouCore.Equation.LE)
+            ineq1.addAddend(1.0, v_current[i])
+            ineq1.setScalar(0.0)
 
+            ineq2 = MarabouUtils.Equation(MarabouCore.Equation.LE)
+            ineq2.addAddend(1.0, v_next[i])
+            ineq2.setScalar(0.0)
+
+            #network.setLowerBound(v_current[i], 0.0)
+            #network.setLowerBound(v_next[i], 0.0)
 
             # Descent constraint
+            ineq3 = MarabouUtils.Equation(MarabouCore.Equation.GE)
+            aii = 0.05
+            epsilon = 0.0
+            ineq3.addAddend(1.0, v_next[i])
+            ineq3.addAddend(-1.0 + aii, v_current[i])
+            for j in self.system.connections[i+1]:
+                if j >= 1:
+                    ineq3.addAddend(-self.system.connections[i+1][j], v_current[j-1])
+
+            ineq3.setScalar(epsilon)
+
+            disjunction.append([ineq1])
+            disjunction.append([ineq2])
+            disjunction.append([ineq3])
+            '''
             aii = 0.05
             epsilon = 0.0
             vars = [v_next[i], v_current[i]]
@@ -142,10 +165,11 @@ class VerificationQuery:
                 coeffs=coeffs,
                 scalar=epsilon
             )
+            '''
 
-        
         #network.saveQuery("query_1.txt")
-
+        #print("disjunction", disjunction)
+        network.addDisjunctionConstraint(disjunction)
         exitCode, vals, stats = network.solve(options=options, verbose=False)
 
         if exitCode == "sat":
@@ -316,9 +340,18 @@ if __name__ == "__main__":
     network = Marabou.read_onnx(cur_comb_file)
 
     inputs = np.array([[20.0, 15.0], [5.0, 10.0], [10.2, 10.0]])
+    #options = Marabou.createOptions(
+    #    verbosity=2,
+    #    solveWithMILP=False,
+    #    snc=False
+    #)
     outputsMarabou = network.evaluateWithMarabou([inputs])
-    network.saveQuery("query_2.txt")
+    #network.saveQuery("query_2.txt")
     outputWMarabou = network.evaluateWithoutMarabou([inputs])
+    pytorch_model = torch.load("combined/combined_0.pth")
+    pytorch_output = pytorch_model(torch.tensor(inputs, dtype=torch.float32))
     print("outputsMarabou", outputsMarabou)
     print("evaluateWithoutMarabou", outputWMarabou)
-
+    print("pytorch_output", pytorch_output)
+    
+#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
