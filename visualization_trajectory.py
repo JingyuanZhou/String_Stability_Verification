@@ -4,6 +4,7 @@ import torch
 from training_exp_comb import PlatoonDynamics
 import torch.nn as nn
 from networks import NetworkController, system_network, DoubleQCritic, VectorLyapunovNetwork, system_network
+import os
 
 # 初始化系统参数
 num_vehicles = 3
@@ -19,6 +20,17 @@ dynamics_params = {
     'a_min': -100.0,
     'desired_spacing': 20.0
 }
+
+# 设置全局样式
+plt.style.use('seaborn-white')  # 使用清爽的背景样式
+
+plt.rcParams["font.family"] = "Times New Roman"
+plt.rcParams['font.size'] = 12  # 设置默认字体大小
+plt.rcParams['axes.labelsize'] = 14  # 坐标轴标签字体大小
+plt.rcParams['axes.titlesize'] = 16  # 标题字体大小
+plt.rcParams['xtick.labelsize'] = 12  # x轴刻度字体大小
+plt.rcParams['ytick.labelsize'] = 12  # y轴刻度字体大小
+plt.rcParams['legend.fontsize'] = 12  # 图例字体大小
 
 if_load_pre_trained_model = False
 
@@ -124,8 +136,8 @@ with torch.no_grad():
 trajectories = torch.stack(trajectories).squeeze(1).numpy()
 
 # 绘制轨迹
-plt.figure(figsize=(12, 8))
-colors = ['b', 'r', 'g']
+fig1 = plt.figure(figsize=(8, 6), dpi=300)
+colors = ['#1f77b4', '#ff7f0e', '#2ca02c']  # 蓝色、橙色、绿色
 labels = ['Leading Vehicle', 'CAV', 'HDV']
 
 for i in range(num_vehicles):
@@ -134,80 +146,88 @@ for i in range(num_vehicles):
     
     plt.subplot(2, 1, 1)
     plt.plot(spacing, label=labels[i], color=colors[i])
-    plt.ylabel('Spacing (m)')
-    plt.grid(True)
-    plt.legend()
+    plt.ylabel('Spacing (m)', fontsize=14)
+    # Increase grid clarity
+    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    plt.legend(fontsize=12)
     
     plt.subplot(2, 1, 2)
     plt.plot(velocities, label=labels[i], color=colors[i])
-    plt.ylabel('Velocity (m/s)')
-    plt.xlabel('Time Steps')
-    plt.grid(True)
-    plt.legend()
+    plt.ylabel('Velocity (m/s)', fontsize=14)
+    plt.xlabel('Time Steps', fontsize=14)
+    # Increase grid clarity
+    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    plt.legend(fontsize=12)
 
 plt.tight_layout()
+fig1.savefig('output_figures/trajectory.pdf', format='pdf', bbox_inches='tight', dpi=300)
+plt.close(fig1)
 
 # visualize lyapunov functions
 spacing_space = np.linspace(15, 25, 100)
 velocity_space = np.linspace(10, 20, 100)
-V = np.zeros((len(spacing_space), len(velocity_space)))
 
-state_dims = [2] * num_vehicles
-V_net = VectorLyapunovNetwork(state_dim=state_dims)
-V_parameters = {}
-for k, v in parameters.items():
-    if k.startswith('V_net.'):
-        new_key = k.replace('V_net.', '')
-        V_parameters[new_key] = v
-print(V_parameters.keys())
-print(V_net)
-V_net.load_state_dict(V_parameters)
+for vehicle_idx in range(num_vehicles-1):
+    V = np.zeros((len(spacing_space), len(velocity_space)))
 
-for i, s in enumerate(spacing_space):
-    for j, v in enumerate(velocity_space):
-        x = torch.tensor([[20.0, 15.0, 20.0, 15.0, s, v]],dtype=torch.float32)
-        x_star = torch.tensor([[20.0, 15.0]*3],dtype=torch.float32)
-        V[i, j] = V_net(x, x_star)[0][1].item()
+    state_dims = [2] * num_vehicles
+    V_net = VectorLyapunovNetwork(state_dim=state_dims)
+    V_parameters = {}
+    for k, v in parameters.items():
+        if k.startswith('V_net.'):
+            new_key = k.replace('V_net.', '')
+            V_parameters[new_key] = v
+    print(V_parameters.keys())
+    print(V_net)
+    V_net.load_state_dict(V_parameters)
 
-# Create a meshgrid: X corresponds to spacing, Y corresponds to velocity
-X, Y = np.meshgrid(spacing_space, velocity_space)
+    for i, s in enumerate(spacing_space):
+        for j, v in enumerate(velocity_space):
+            if vehicle_idx == 0:
+                x = torch.tensor([[20.0, 15.0, s, v, 20.0, 15.0]], dtype=torch.float32)
+                x_star = torch.tensor([[20.0, 15.0]*3], dtype=torch.float32)
+                V[i, j] = V_net(x, x_star)[0][0].item()
+            else:
+                x = torch.tensor([[20.0, 15.0, 20.0, 15.0, s, v]], dtype=torch.float32)
+                x_star = torch.tensor([[20.0, 15.0]*3], dtype=torch.float32)
+                V[i, j] = V_net(x, x_star)[0][1].item()
 
-# Since you used V.T in contourf, Z would be V.T to match X, Y shapes
-Z = V.T
+    # Create a meshgrid: X corresponds to spacing, Y corresponds to velocity
+    X, Y = np.meshgrid(spacing_space, velocity_space)
 
-fig = plt.figure(figsize=(8, 6))
-ax = fig.add_subplot(111, projection='3d')
+    # Since you used V.T in contourf, Z would be V.T to match X, Y shapes
+    Z = V.T
 
-# Create the surface plot
-surf = ax.plot_surface(X, Y, Z, cmap='viridis')
+    # 3D Lyapunov图
+    fig2 = plt.figure(figsize=(8, 6), dpi=300)
+    ax = fig2.add_subplot(111, projection='3d')
+    surf = ax.plot_surface(X, Y, Z, cmap='viridis', antialiased=True)
+    ax.set_xlabel('Spacing (m)', fontsize=14, labelpad=10)
+    ax.set_ylabel('Velocity (m/s)', fontsize=14, labelpad=10)
+    ax.set_zlabel('Lyapunov Function', fontsize=14, labelpad=10)
+    ax.view_init(elev=30, azim=45)  # 优化视角
+    plt.tight_layout()
+    if i == 0:
+        fig2.savefig('output_figures/lyapunov_3d_CAV.pdf', format='pdf', bbox_inches='tight', dpi=300)
+    else:
+        fig2.savefig('output_figures/lyapunov_3d_HDV.pdf', format='pdf', bbox_inches='tight', dpi=300)
+    plt.close(fig2)
 
-# If you want to mark the equilibrium point in 3D,
-# you need the corresponding Z-value at (x=20, y=15).
-# We'll assume you have it, for example:
-# equilibrium_z = ...  # e.g., Z at that coordinate
-# For demonstration, let's just pick the nearest index or a known value:
-equilibrium_z = V[20,15]  # Replace with the actual value from V
-
-ax.scatter(20, 15, equilibrium_z, color='r', marker='x', s=50, label='equilibrium')
-
-# Label axes
-ax.set_xlabel('Spacing (m)')
-ax.set_ylabel('Velocity (m/s)')
-ax.set_zlabel('Lyapunov Function')
-
-# Add a colorbar
-fig.colorbar(surf, ax=ax, shrink=0.5, aspect=10)
-
-plt.title('Lyapunov Function - Surface Plot')
-plt.legend()
-
-
-# Create a contour plot for the Lyapunov function
-fig, ax = plt.subplots(figsize=(8, 6))
-contour = ax.contourf(X, Y, Z, cmap='viridis')
-
-
-
+    # 2D等高线图
+    fig3, ax = plt.subplots(figsize=(8, 6), dpi=300)
+    contour = ax.contourf(X, Y, Z, cmap='viridis', levels=20, alpha=0.95)
+    ax.plot(20, 15, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
+    ax.set_xlabel('Spacing (m)', fontsize=14, labelpad=10)
+    ax.set_ylabel('Velocity (m/s)', fontsize=14, labelpad=10)
+    plt.colorbar(contour)  # 添加颜色条
+    plt.legend(fontsize=12, frameon=True, fancybox=True, framealpha=0.8)
+    plt.tight_layout()
+    
+    if vehicle_idx == 0:
+        fig3.savefig('output_figures/lyapunov_contour_CAV.pdf', format='pdf', bbox_inches='tight', dpi=300)
+    else:
+        fig3.savefig('output_figures/lyapunov_contour_HDV.pdf', format='pdf', bbox_inches='tight', dpi=300)
+    plt.close(fig3)
 
 values_new_controller = np.zeros((len(spacing_space), len(velocity_space)))
 value_origin_controller = np.zeros((len(spacing_space), len(velocity_space)))
@@ -245,22 +265,31 @@ for i, s in enumerate(spacing_space):
         values_new_controller[i,j] = critics(sample_x, new_controller).item()
         value_origin_controller[i,j] = critics(sample_x, origin_controller).item()
 
-fig = plt.figure(figsize=(8, 6))
-ax = fig.add_subplot(111, projection='3d')
+# Create a meshgrid
+X, Y = np.meshgrid(spacing_space, velocity_space)
 
-# Create the surface plot
-surf_1 = ax.plot_surface(X, Y, values_new_controller-value_origin_controller, cmap='viridis') #values_new_controller-value_origin_controller
+# Q-value差值图
+fig4 = plt.figure(figsize=(8, 6), dpi=300)
+ax = fig4.add_subplot(111, projection='3d')
+surf_1 = ax.plot_surface(X, Y, values_new_controller-value_origin_controller, 
+                        cmap='viridis', antialiased=True)
+ax.set_xlabel('Spacing (m)', fontsize=14, labelpad=10)
+ax.set_ylabel('Velocity (m/s)', fontsize=14, labelpad=10)
+ax.set_zlabel('Q-value difference', fontsize=14, labelpad=10)
+ax.view_init(elev=30, azim=45)  # 优化视角
+plt.tight_layout()
+fig4.savefig('output_figures/q_value_difference_3d.pdf', format='pdf', bbox_inches='tight', dpi=300)
+plt.close(fig4)
 
-
-# Label axes
-ax.set_xlabel('Spacing (m)')
-ax.set_ylabel('Velocity (m/s)')
-ax.set_zlabel('Q-value difference')
-
-# Add a colorbar
-fig.colorbar(surf_1, ax=ax, shrink=0.5, aspect=10)
-
-plt.title('Q-value - Surface Plot')
-#plt.legend(['New Controller', 'Original Controller'])
-
-plt.show()
+# 新增：Q-value差值的等高线图
+fig5, ax = plt.subplots(figsize=(8, 6), dpi=300)
+contour = ax.contourf(X, Y, values_new_controller-value_origin_controller, 
+                     cmap='viridis', levels=20, alpha=0.95)
+ax.plot(20, 15, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
+ax.set_xlabel('Spacing (m)', fontsize=14, labelpad=10)
+ax.set_ylabel('Velocity (m/s)', fontsize=14, labelpad=10)
+plt.colorbar(contour)  # 添加颜色条
+plt.legend(fontsize=12, frameon=True, fancybox=True, framealpha=0.8)
+plt.tight_layout()
+fig5.savefig('output_figures/q_value_difference_contour.pdf', format='pdf', bbox_inches='tight', dpi=300)
+plt.close(fig5)
