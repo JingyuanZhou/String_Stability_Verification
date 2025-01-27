@@ -242,8 +242,8 @@ class StringStabilityTrainer(pl.LightningModule):
                 controls.append(None)
                 original_controls.append(None)
         
-        control_dist = torch.square(original_controls[1] - controls[1]).mean()/2000
-        value_dist = torch.relu(-(10 + self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()/5000
+        control_dist = torch.square(original_controls[1] - controls[1]).mean()/3000
+        value_dist = torch.relu(-(10 + self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()/6000
 
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
