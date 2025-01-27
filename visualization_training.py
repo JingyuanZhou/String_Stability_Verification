@@ -2,12 +2,17 @@ from tbparse import SummaryReader
 import matplotlib.pyplot as plt
 import numpy as np
 
-plt.figure(figsize=(8, 6))
-vis_index = [str(i) for i in range(8)]
+# Set font to Times New Roman
+#plt.rcParams["font.family"] = "Times"
 
+# Increase figure resolution
+plt.figure(figsize=(8, 6), dpi=300)  # Higher DPI for better clarity
+
+vis_index = [str(i) for i in range(8)]
 num_colors = len(vis_index)
 color_map = plt.get_cmap("tab10", num_colors)  # Dynamically get 'tab10' colormap
 color_index = color_map(np.arange(num_colors))  # Assign unique colors
+
 for index in range(len(vis_index)):
     log_dir = "lightning_logs/version_" + vis_index[index]
     reader = SummaryReader(log_dir)
@@ -18,16 +23,27 @@ for index in range(len(vis_index)):
     train_loss_epoch_df = df[df["tag"] == "train_loss_epoch"]
 
     # Plot train loss
-    plt.plot(train_loss_df["step"], train_loss_df["value"], marker='o', linestyle='-', 
-            color=color_index[index], label="Iter "+str(index)) # changing different color for each line
+    plt.plot(train_loss_df["step"], train_loss_df["value"], marker='o', linestyle='-',
+             color=color_index[index], label="Iter " + str(index))  # Assign different colors
 
-    plt.legend()
+# Update legend with two columns
+plt.legend(ncol=2, fontsize=10, loc="upper right")
 
-plt.xlabel("Training Step")
-plt.ylabel("Loss Value")
-plt.title("Train Loss Over Steps")
-plt.grid(True)
+# Set axis labels
+plt.xlabel("Training Step", fontsize=14)
+plt.ylabel("Loss Value", fontsize=14)
+
+# Increase grid clarity
+plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+
+# Save figure as PDF with high resolution
+plt.savefig("output_figures/train_loss_plot.pdf", format="pdf", dpi=300, bbox_inches="tight")
+
+# Show plot
 plt.show()
 
-# print all the tags
-print(reader.tags)
+num_ce_list = np.load("data/num_ce_list.npy")
+num_veri_time_list = np.load("data/num_veri_time_list.npy")
+
+print(num_ce_list)
+print(num_veri_time_list)

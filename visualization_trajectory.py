@@ -134,7 +134,7 @@ for i in range(num_vehicles):
     
     plt.subplot(2, 1, 1)
     plt.plot(spacing, label=labels[i], color=colors[i])
-    plt.ylabel('spacing (m)')
+    plt.ylabel('Spacing (m)')
     plt.grid(True)
     plt.legend()
     
