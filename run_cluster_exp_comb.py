@@ -5,19 +5,16 @@ from datetime import datetime
 from generate_combined_model_torch_comb import combined_model
 from queries_comb import safe_descent_cond_check
 import warnings
+import numpy as np
 warnings.filterwarnings("ignore")
-
-# Create output directories
-out_folders = ["controllers/", "models/", "data/", "combined/", "counterexamples/", "model_weights/"]
-for folder in out_folders:
-    if not os.path.isdir(folder):
-        os.mkdir(folder)
 
 # System parameters
 num_vehicles = 3
 cav_indices = [1]  # Second vehicle is CAV
 state_dims = [2] * num_vehicles
 control_dims = [1] * num_vehicles
+num_ce_list = []
+num_veri_time_list = []
 
 # Dynamics parameters
 dynamics_params = {
@@ -84,14 +81,17 @@ end_ver_time = datetime.now()
 diff_ver_time = end_ver_time - st_ver_time
 print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds))
 print("Total counter examples found:", str(len(ret)) + "\n")
+num_ce_list.append(len(ret))
+num_veri_time_list.append(diff_ver_time.seconds)
 
 while (len(ret) > 0) and (index < max_iters):
     index += 1
+    learning_rate = learning_rate / 2
 
     st_train_time = datetime.now()
     controllers, system, V_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 
                                                control_dims=control_dims, in_system=system, counterexamples=torch.Tensor(ret), 
-                                               counterexample_ranges=ret_ranges, epoch=num_epochs, in_model= V_net, 
+                                               counterexample_ranges=ret_ranges, epoch=num_epochs, in_model= V_net, learning_rate=learning_rate,
                                                in_controller = controllers, index = index, pre_trained_model=pre_trained_model, pre_trained_critics = pre_trained_critics, combined_model_path=cur_comb_file)
     end_train_time = datetime.now()
     diff = end_train_time - st_train_time
@@ -109,6 +109,10 @@ while (len(ret) > 0) and (index < max_iters):
     diff_ver_time = end_ver_time - st_ver_time
     print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds) + "\n")
     print("Total counter examples found:", str(len(ret)) + "\n")
+    num_ce_list.append(len(ret))
+    num_veri_time_list.append(diff_ver_time.seconds)
 
+np.save("data/num_ce_list.npy", num_ce_list)
+np.save("data/num_veri_time_list.npy", num_veri_time_list)
 print(failed)
 

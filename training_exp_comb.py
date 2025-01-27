@@ -243,7 +243,7 @@ class StringStabilityTrainer(pl.LightningModule):
                 original_controls.append(None)
         
         control_dist = torch.square(original_controls[1] - controls[1]).mean()/2000
-        value_dist = 0*torch.relu(-(self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()
+        value_dist = torch.relu(-(10 + self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()/5000
 
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
@@ -329,9 +329,10 @@ class StringStabilityTrainer(pl.LightningModule):
 
         # Compute loss ensuring string stability conditions
         if self.current_index == 0:
-            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean()# + 100*torch.relu(coef_cons+epsilon).mean() + control_dist #+ value_dist 
+            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + 100*torch.relu(coef_cons).mean() #+ control_dist #+ value_dist 
         else: 
-            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist #+ 100*torch.relu(coef_cons+epsilon).mean()#+ value_dist + reward_related_loss 
+            self.V_net.coupling_matrix.coupling_matrix.requires_grad = False
+            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist + value_dist #+ reward_related_loss  + 100*torch.relu(coef_cons).mean() 
         
         # Update networks
         opt.zero_grad()
@@ -379,7 +380,7 @@ class StringStabilityTrainer(pl.LightningModule):
 
 class PlatoonDataModule(pl.LightningDataModule):
     def __init__(self, num_vehicles, cav_indices, dynamics_params, 
-                 batch_size=16, num_samples=2000):
+                 batch_size=16, num_samples=3000):
         super().__init__()
         self.num_vehicles = num_vehicles
         self.cav_indices = cav_indices
@@ -622,6 +623,9 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         old_data_states = torch.load(self.in_train_file)[0]
         old_data_x_stars = torch.load(self.in_train_file)[1]
         old_data_disturbances = torch.load(self.in_train_file)[2]
+        old_val_states = torch.load(self.out_val_file)[0]
+        old_val_x_stars = torch.load(self.out_val_file)[1]
+        old_val_disturbances = torch.load(self.out_val_file)[2]
 
         # generate new x_stars for counterexamples, which is of same size as counterexamples
         new_x_stars = torch.zeros_like(self.counterexamples)
@@ -635,15 +639,20 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         combined_data_x_stars = torch.cat([old_data_x_stars, new_x_stars], dim=0)
         combined_data_disturbances = torch.cat([old_data_disturbances, new_data_disturbances], dim=0)
 
+        combined_val_states = torch.cat([old_val_states, self.counterexamples], dim=0)
+        combined_val_x_stars = torch.cat([old_val_x_stars, new_x_stars], dim=0)
+        combined_val_disturbances = torch.cat([old_val_disturbances, new_data_disturbances], dim=0)
+
         # add some data augementation for original counterexamples
         combined_data = (combined_data_states, combined_data_x_stars, combined_data_disturbances)
+        combined_val_data = (combined_val_states, combined_val_x_stars, combined_val_disturbances)
         
         # 保存新的训练数据
         torch.save(combined_data, self.out_train_file)
         
         # 创建数据集
         self.train_dataset = TensorDataset(*combined_data)
-        self.val_dataset = TensorDataset(*torch.load(self.out_val_file))
+        self.val_dataset = TensorDataset(*combined_val_data)
 
     def train_dataloader(self):
         return DataLoader(self.train_dataset, batch_size=self.batch_size, shuffle=True)
@@ -718,7 +727,7 @@ def add_noise_to_counterexamples(counterexamples):
     """
     
     counter_example_expanded = counterexamples
-    for i in range(5):
+    for i in range(10):
         noise = (torch.rand_like(counterexamples) - 0.5) * 0.01 * (i+1)
         noise[:, 0, 0] = 0.0  # No noise on first vehicle spacing
         noise[:, 0, 1] = 0.0  # No noise on first vehicle velocity

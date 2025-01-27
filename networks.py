@@ -13,12 +13,12 @@ class GraphCouplingMatrix(nn.Module):
         super(GraphCouplingMatrix, self).__init__()
         self.N = N
         # 直接定义一个可学习的参数矩阵
-        self.coupling_matrix = nn.Parameter(torch.zeros(N, N), requires_grad=False)
+        self.coupling_matrix = nn.Parameter(torch.zeros(N, N), requires_grad=True)
         self.reset_parameters()
         
     def reset_parameters(self):
         """Initialize the coupling matrix with small values"""
-        nn.init.uniform_(self.coupling_matrix, a = 0.05, b = 0.05)# 0.01
+        nn.init.uniform_(self.coupling_matrix, a = 0.045, b = 0.048)# 0.01
         
     def forward(self, G):
         """

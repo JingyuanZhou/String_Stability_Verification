@@ -15,8 +15,8 @@ dynamics_params = {
     'v_max': 30.0,
     's_st': 5.0,
     's_go': 35.0,
-    'a_max': 7.0,
-    'a_min': -7.0,
+    'a_max': 100.0,
+    'a_min': -100.0,
     'desired_spacing': 20.0
 }
 
@@ -35,7 +35,7 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v598.ckpt')
+check_point = torch.load(f'model_weights/best_model-v7.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
 pre_trained_id = 90
@@ -165,9 +165,9 @@ V_net.load_state_dict(V_parameters)
 
 for i, s in enumerate(spacing_space):
     for j, v in enumerate(velocity_space):
-        x = torch.tensor([[20.0, 15.0, s, v, 20.0, 15.0]],dtype=torch.float32)
+        x = torch.tensor([[20.0, 15.0, 20.0, 15.0, s, v]],dtype=torch.float32)
         x_star = torch.tensor([[20.0, 15.0]*3],dtype=torch.float32)
-        V[i, j] = V_net(x, x_star)[0][0].item()
+        V[i, j] = V_net(x, x_star)[0][1].item()
 
 # Create a meshgrid: X corresponds to spacing, Y corresponds to velocity
 X, Y = np.meshgrid(spacing_space, velocity_space)
