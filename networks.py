@@ -13,12 +13,12 @@ class GraphCouplingMatrix(nn.Module):
         super(GraphCouplingMatrix, self).__init__()
         self.N = N
         # 直接定义一个可学习的参数矩阵
-        self.coupling_matrix = nn.Parameter(torch.zeros(N, N), requires_grad=True)
+        self.coupling_matrix = nn.Parameter(torch.zeros(N, N), requires_grad=False)
         self.reset_parameters()
         
     def reset_parameters(self):
         """Initialize the coupling matrix with small values"""
-        nn.init.uniform_(self.coupling_matrix, 0.01, 0.03)
+        nn.init.uniform_(self.coupling_matrix, a = 0.05, b = 0.05)# 0.01
         
     def forward(self, G):
         """
@@ -39,7 +39,7 @@ class GraphCouplingMatrix(nn.Module):
         return A_masked
 
 class VectorLyapunovNetwork(nn.Module):
-    def __init__(self, state_dim, hidden_dim=30):
+    def __init__(self, state_dim, hidden_dim=64):
         super(VectorLyapunovNetwork, self).__init__()
         self.num_vehicles = len(state_dim)
         self.one_state_dim = state_dim[0]
@@ -119,8 +119,8 @@ class VectorLyapunovNetwork(nn.Module):
         #R_term_2 = torch.norm(torch.matmul(state_diff_2, self.R2.T), p=1, dim=1)
 
         # calculation of Lyapunov function
-        V_1 = self.network_1(x1) - self.network_1(x_star_1) #+ R_term_1
-        V_2 = self.network_2(x2) - self.network_2(x_star_2) #+ R_term_2
+        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.005 #+ R_term_1
+        V_2 = self.network_2(x2) - self.network_2(x_star_2) + 0.005 #+ R_term_2
 
         V = torch.cat([V_1, V_2], dim=1)
             

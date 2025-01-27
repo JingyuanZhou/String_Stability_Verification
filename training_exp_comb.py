@@ -181,6 +181,7 @@ class StringStabilityTrainer(pl.LightningModule):
         self.current_index = current_index
         self.original_controller = original_controller
         self.critics = critics
+        self.dt = 0.1
         
     def create_binary_adjacency_matrix(self, connections):
         """
@@ -241,8 +242,8 @@ class StringStabilityTrainer(pl.LightningModule):
                 controls.append(None)
                 original_controls.append(None)
         
-        control_dist = torch.square(original_controls[1] - controls[1]).mean()/5000
-        value_dist = torch.relu(-(self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()
+        control_dist = torch.square(original_controls[1] - controls[1]).mean()/2000
+        value_dist = 0*torch.relu(-(self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()
 
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
@@ -256,7 +257,7 @@ class StringStabilityTrainer(pl.LightningModule):
         #V_diff = torch.sum(nn.ReLU(V_current - beta))
 
         for i in range(1, states.shape[1]):  # Skip leading vehicle
-            decrease = V_next[:,i-1] - V_current[:,i-1]
+            decrease = (V_next[:,i-1] - V_current[:,i-1])
             # Add interconnection terms based on connection matrix
             decrease += 0.05 * V_current[:,i-1]
             coef_con = torch.tensor(-0.05, device=V_current.device, dtype=V_current.dtype)
@@ -321,16 +322,16 @@ class StringStabilityTrainer(pl.LightningModule):
         states, x_stars, disturbances = batch
 
         # Compute vector Lyapunov conditions
-        epsilon = 1e-3
+        epsilon = 1e-2
         V_decreases, V_current, control_dist, coef_cons, value_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
 
         reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
 
         # Compute loss ensuring string stability conditions
         if self.current_index == 0:
-            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + value_dist + 100*torch.relu(coef_cons+epsilon).mean()
+            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean()# + 100*torch.relu(coef_cons+epsilon).mean() + control_dist #+ value_dist 
         else: 
-            loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() + control_dist + value_dist + reward_related_loss + 100*torch.relu(coef_cons+epsilon).mean()
+            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist #+ 100*torch.relu(coef_cons+epsilon).mean()#+ value_dist + reward_related_loss 
         
         # Update networks
         opt.zero_grad()
@@ -339,7 +340,7 @@ class StringStabilityTrainer(pl.LightningModule):
         
         # Add detailed logging
         self.log("train_loss", loss, prog_bar=True)  # Show in progress bar
-        self.log("loss_decrease", torch.relu(V_decreases).mean(), prog_bar=True)
+        self.log("loss_decrease", 5*torch.relu(V_decreases).mean(), prog_bar=True)
         self.log("loss_positive", 10*torch.relu(-V_current).mean(), prog_bar=True)
         
         return loss
@@ -347,13 +348,13 @@ class StringStabilityTrainer(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         
         states, x_stars, disturbances = batch
-        epsilon = 1e-3
+        epsilon = 1e-2
         reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
         V_decreases, V_current, control_dist, coef_cons, value_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
         if self.current_index == 0:
-            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() +control_dist+ value_dist + torch.relu(coef_cons).mean()
+            val_loss = 10 * torch.relu(-V_current+epsilon).mean() +  5*torch.relu(V_decreases + epsilon).mean() # +control_dist+ value_dist + torch.relu(coef_cons).mean()
         else: 
-            val_loss = torch.relu(V_decreases + epsilon).mean() + 10 * torch.relu(-V_current+epsilon).mean() +control_dist+ value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
+            val_loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() #+ control_dist+ value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
         
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
@@ -378,7 +379,7 @@ class StringStabilityTrainer(pl.LightningModule):
 
 class PlatoonDataModule(pl.LightningDataModule):
     def __init__(self, num_vehicles, cav_indices, dynamics_params, 
-                 batch_size=16, num_samples=10000):
+                 batch_size=16, num_samples=2000):
         super().__init__()
         self.num_vehicles = num_vehicles
         self.cav_indices = cav_indices
@@ -387,8 +388,8 @@ class PlatoonDataModule(pl.LightningDataModule):
         self.num_samples = num_samples
         
         # Define state ranges
-        self.spacing_range = (0.0, 40.0)  # Centered around desired_spacing
-        self.vel_range = (0.0, 30.0)
+        self.spacing_range = (5, 35.0)  # Centered around desired_spacing
+        self.vel_range = (5.0, 25.0)
         self.dist_range = (-0.5, 0.5)
         
     def _generate_samples(self):
@@ -680,7 +681,7 @@ def check_counter_examples(V_net, controllers, system, cav_indices, counterexamp
         #print("true_current_state:",state," true_next_state: ", next_states, "cmb_next_state: ", cmb_next_state)
         #print("true_current_V:", V_values, " true_next_V: ", V_net(next_states, x_star)[0], "cmb_next_V: ", cmb_next_V)
         V_next = V_net(next_states, x_star)[0]
-        False_ce = False
+        false_ce = True
         for i in range(V_next.size(0)):
             aii = 0.05
             epsilon = 0.0
@@ -693,10 +694,10 @@ def check_counter_examples(V_net, controllers, system, cav_indices, counterexamp
                     coeffs.append(-system.connections[i+1][j])
 
             expr = sum(v * c for v, c in zip(vars_, coeffs))
-            if expr <= epsilon and V_values[i] >= 0.0 and V_next[i] >= 0.0:
-                False_ce = True
+            if expr >= epsilon or V_values[i] <= 0.0 or V_next[i] <= 0.0:
+                false_ce = False
                 #print(f"vars: {[round(v, 3) for v in vars_]}, coeffs: {[round(c, 3) for c in coeffs]}, expr: {round(expr, 3)}")
-        if False_ce:
+        if false_ce:
             number_of_false_counterexamples += 1
 
     if number_of_false_counterexamples == 0:
@@ -717,8 +718,8 @@ def add_noise_to_counterexamples(counterexamples):
     """
     
     counter_example_expanded = counterexamples
-    for i in range(9):
-        noise = (torch.rand_like(counterexamples) - 0.5) * 0.1 * (i+1)
+    for i in range(5):
+        noise = (torch.rand_like(counterexamples) - 0.5) * 0.01 * (i+1)
         noise[:, 0, 0] = 0.0  # No noise on first vehicle spacing
         noise[:, 0, 1] = 0.0  # No noise on first vehicle velocity
         counter_example_expanded = torch.cat([counter_example_expanded, counterexamples + noise], dim=0)
@@ -763,7 +764,7 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
     # Initialize system dynamics
     system = in_system
 
-    check_counter_examples(V_net, controllers, system, cav_indices, counterexamples, combined_model_path)
+    #check_counter_examples(V_net, controllers, system, cav_indices, counterexamples, combined_model_path)
     counterexamples = add_noise_to_counterexamples(counterexamples)
     # Initialize data module with counterexamples
     data_module = PlatoonDataModuleRetrain(

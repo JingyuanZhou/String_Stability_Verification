@@ -35,7 +35,7 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v399.ckpt')
+check_point = torch.load(f'model_weights/best_model-v598.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
 pre_trained_id = 90
@@ -148,8 +148,8 @@ for i in range(num_vehicles):
 plt.tight_layout()
 
 # visualize lyapunov functions
-spacing_space = np.linspace(5, 35, 100)
-velocity_space = np.linspace(2, 30, 100)
+spacing_space = np.linspace(15, 25, 100)
+velocity_space = np.linspace(10, 20, 100)
 V = np.zeros((len(spacing_space), len(velocity_space)))
 
 state_dims = [2] * num_vehicles
@@ -165,7 +165,7 @@ V_net.load_state_dict(V_parameters)
 
 for i, s in enumerate(spacing_space):
     for j, v in enumerate(velocity_space):
-        x = torch.tensor([[20.0, 15.0,s, v, 20.0, 15.0]],dtype=torch.float32)
+        x = torch.tensor([[20.0, 15.0, s, v, 20.0, 15.0]],dtype=torch.float32)
         x_star = torch.tensor([[20.0, 15.0]*3],dtype=torch.float32)
         V[i, j] = V_net(x, x_star)[0][0].item()
 

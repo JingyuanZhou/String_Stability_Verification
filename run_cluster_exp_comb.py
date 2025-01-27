@@ -33,9 +33,9 @@ dynamics_params = {
 }
 
 # Training parameters
-learning_rate = 3e-5
+learning_rate = 1e-4
 batch_size = 32
-num_epochs = 5
+num_epochs = 10
 
 max_iters = 10000
 

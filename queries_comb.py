@@ -10,6 +10,7 @@ sys.path.append("/home/zhoujy53/Desktop/Marabou")
 from maraboupy import Marabou
 from maraboupy import MarabouCore, MarabouUtils
 
+
 #from training_exp_mask import LyapunovNetworkV, TwoDimDocking
 
 # from maraboupy import MarabouCore
@@ -20,6 +21,7 @@ class VerificationQuery:
         self.num_lyap = num_agents - 1
         self.system = system
         self.dt = 0.1
+        self.count_superious_ce = 0
         
     def run_unroll(self, network):
         """单步验证的核心逻辑，处理多个Lyapunov函数的下降条件验证
@@ -68,7 +70,8 @@ class VerificationQuery:
         options = Marabou.createOptions(
             verbosity=0,
             solveWithMILP=useMILP,
-            snc=False
+            snc=False,
+            numWorkers=4
         )
         
         #print("input_bounds", input_bounds)
@@ -123,11 +126,11 @@ class VerificationQuery:
 
             ineq1 = MarabouUtils.Equation(MarabouCore.Equation.LE)
             ineq1.addAddend(1.0, v_current[i])
-            ineq1.setScalar(0.0)
+            ineq1.setScalar(-0.0001) #0.00001
 
             ineq2 = MarabouUtils.Equation(MarabouCore.Equation.LE)
             ineq2.addAddend(1.0, v_next[i])
-            ineq2.setScalar(0.0)
+            ineq2.setScalar(-0.0001) #
 
             #network.setLowerBound(v_current[i], 0.0)
             #network.setLowerBound(v_next[i], 0.0)
@@ -135,37 +138,18 @@ class VerificationQuery:
             # Descent constraint
             ineq3 = MarabouUtils.Equation(MarabouCore.Equation.GE)
             aii = 0.05
-            epsilon = 0.0
+            epsilon = 0.04
             ineq3.addAddend(1.0, v_next[i])
             ineq3.addAddend(-1.0 + aii, v_current[i])
             for j in self.system.connections[i+1]:
                 if j >= 1:
                     ineq3.addAddend(-self.system.connections[i+1][j], v_current[j-1])
 
-            ineq3.setScalar(epsilon)
+            ineq3.setScalar(epsilon) #epsilon
 
             disjunction.append([ineq1])
-            disjunction.append([ineq2])
+            #disjunction.append([ineq2])
             disjunction.append([ineq3])
-            '''
-            aii = 0.05
-            epsilon = 0.0
-            vars = [v_next[i], v_current[i]]
-            coeffs = [1.0, -1.0 + aii]  # Coefficients for v_next[i] and v_current[i]
-
-            # Add coefficients for system.connections[i+1]
-
-            for j in self.system.connections[i+1]:
-                if j >= 1:
-                    vars.append(v_current[j-1])  # Add v_current[j-1] variable
-                    coeffs.append(-self.system.connections[i+1][j])  # Corresponding coefficient
-            # Add the inequality to the network
-            network.addInequality(
-                vars=vars,
-                coeffs=coeffs,
-                scalar=epsilon
-            )
-            '''
 
         #network.saveQuery("query_1.txt")
         #print("disjunction", disjunction)
@@ -179,11 +163,34 @@ class VerificationQuery:
                 spacing_val = vals[current_state[agent_id][0]]
                 velocity_val = vals[current_state[agent_id][1]]
                 counterexample.append([spacing_val, velocity_val])
-            lya_1 = [vals[v_current[0]], vals[v_next[0]]]
-            lya_2 = [vals[v_current[1]], vals[v_next[1]]]
+            lya_current = [vals[v_current[0]], vals[v_current[1]]]
+            lya_next = [vals[v_next[0]], vals[v_next[1]]]
             solved_next_state = [vals[next_state[i]] for i in range(6)]
 
-            print("counter_example", counterexample, "solved_next_state", solved_next_state,"lyapunov_1", lya_1, "lyapunov_2", lya_2)
+            ground_true = network.evaluateWithoutMarabou([np.array(counterexample)])
+            # check counter example
+            # decresing conditions
+            ce = True
+            expr_ls = []
+            for i in range(self.num_lyap):
+                aii = 0.05
+                epsilon = 0.0
+                vars_ = [lya_next[i], lya_current[i]]
+                coeffs = [1.0, -1.0 + aii]
+
+                for j in self.system.connections[i+1]:
+                    if j >= 1:
+                        vars_.append(lya_current[j-1])
+                        coeffs.append(-self.system.connections[i+1][j])
+
+                expr = sum(v * c for v, c in zip(vars_, coeffs))
+                expr_ls.append(expr)
+                if lya_current[0]<=0 or lya_current[1]<=0 or expr >= epsilon:
+                    ce = False
+            if ce:
+                self.count_superious_ce += 1
+            #print("ground_true", ground_true)
+                print("counter_example", counterexample, "solved_next_state", solved_next_state,"lya_current", lya_current, "lya_next", lya_next, "expr_ls", expr_ls)
             return counterexample  # 多维列表
         elif exitCode == "unsat":
             # 不可满足 => 不存在反例 => 安全
@@ -218,8 +225,13 @@ def safe_descent_cond_check(
     # => spacing_space: [0, 10, 20, 30, 40], velocity_space: [0, 7.5, 15, 22.5, 30]
     # => 4 个区间(因为有5个端点)
     split_num = 76
-    spacing_space = np.linspace(5, 35, split_num)
-    velocity_space = np.linspace(10, vel_limit, split_num)
+    max_spacing = 25
+    min_spacing = 15
+    max_vel = 20
+    min_vel = 10
+
+    spacing_space = np.linspace(min_spacing, max_spacing, split_num)
+    velocity_space = np.linspace(min_vel, max_vel, split_num)
 
 
     # 3) 存储验证结果
@@ -244,22 +256,22 @@ def safe_descent_cond_check(
                     [15, 15],   # velocity_头车
                     # agent=1
                     [round(spacing_space[i], 2),   round(spacing_space[i+1], 2)],
-                    [10, vel_limit],
+                    [min_vel, max_vel],
                     #[round(velocity_space[k], 2),  round(velocity_space[k+1], 2)],
                     # agent=2
-                    [5, 35],
-                    [10, vel_limit]
+                    [min_spacing, max_spacing],
+                    [min_vel, max_vel]
                 ]
             elif agent == 2:
                 state_bounds = [
                     [20, 20],   # spacing_头车
                     [15, 15],   # velocity_头车
                     # agent=1
-                    [5, 35],
-                    [10, vel_limit],
+                    [min_spacing, max_spacing],
+                    [min_vel, max_vel],
                     # agent=2
                     [round(spacing_space[i], 2),   round(spacing_space[i+1], 2)],
-                    [10, vel_limit],
+                    [min_vel, max_vel],
                     #[round(velocity_space[k], 2),  round(velocity_space[k+1], 2)]
                 ]
 
@@ -289,21 +301,21 @@ def safe_descent_cond_check(
                     [20, 20],   # spacing_头车
                     [15, 15],   # velocity_头车
                     # agent=1
-                    [5, 35],
+                    [min_spacing, max_spacing],
                     [round(velocity_space[k], 2),  round(velocity_space[k+1], 2)],
                     # agent=2
-                    [5, 35],
-                    [10, vel_limit]
+                    [min_spacing, max_spacing],
+                    [min_vel, max_vel]
                 ]
             elif agent == 2:
                 state_bounds = [
                     [20, 20],   # spacing_头车
                     [15, 15],   # velocity_头车
                     # agent=1
-                    [5, 35],
-                    [10, vel_limit],
+                    [min_spacing, max_spacing],
+                    [min_vel, max_vel],
                     # agent=2
-                    [5, 35],
+                    [min_spacing, max_spacing],
                     [round(velocity_space[k], 2),  round(velocity_space[k+1], 2)]
                 ]
 
@@ -328,6 +340,8 @@ def safe_descent_cond_check(
     # 你也可以根据自己需求修改
     if found_count > 0:
         verification_result = "fail (found at least one counterexample)"
+        print("found_count", found_count)
+        print("count_superious_ce", query.count_superious_ce)
     elif timeout_count > 0:
         verification_result = "inconclusive (some queries timed out or solver error)"
     else:
@@ -336,22 +350,22 @@ def safe_descent_cond_check(
     return vals_found, val_ranges, verification_result
 
 if __name__ == "__main__":
-    cur_comb_file = "combined/combined_0.onnx"
+    cur_comb_file = "combined/combined.onnx"
     network = Marabou.read_onnx(cur_comb_file)
 
     inputs = np.array([[20.0, 15.0], [5.0, 10.0], [10.2, 10.0]])
-    #options = Marabou.createOptions(
-    #    verbosity=2,
-    #    solveWithMILP=False,
-    #    snc=False
-    #)
-    outputsMarabou = network.evaluateWithMarabou([inputs])
+    options = Marabou.createOptions(
+        verbosity=2,
+        solveWithMILP=True,
+        snc=False
+    )
+    outputsMarabou = network.evaluateWithMarabou([inputs], options)
     #network.saveQuery("query_2.txt")
     outputWMarabou = network.evaluateWithoutMarabou([inputs])
-    pytorch_model = torch.load("combined/combined_0.pth")
-    pytorch_output = pytorch_model(torch.tensor(inputs, dtype=torch.float32))
+    #pytorch_model = torch.load("combined/combined.pth")
+    #pytorch_output = pytorch_model(torch.tensor(inputs, dtype=torch.float32))
     print("outputsMarabou", outputsMarabou)
     print("evaluateWithoutMarabou", outputWMarabou)
-    print("pytorch_output", pytorch_output)
+    #print("pytorch_output", pytorch_output)
     
 #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

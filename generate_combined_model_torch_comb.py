@@ -10,7 +10,7 @@ class CombinedNetwork(nn.Module):
         self.controllers = controllers
         self.controllers_temp = controllers
         self.V_net_1 = V_net
-        self.V_net_2 = V_net
+        #self.V_net_2 = V_net
         self.system_dynamics = system_dynamics
         self.cav_indices = cav_indices
         self.state_dims = state_dims
@@ -75,7 +75,7 @@ class CombinedNetwork(nn.Module):
         #print("next_state", next_state)
 
         output_V = self.V_net_1(x, x_stars)
-        next_V = self.V_net_2(next_state, x_stars)
+        next_V = self.V_net_1(next_state, x_stars)
 
         return output_V, next_state, next_V
 
