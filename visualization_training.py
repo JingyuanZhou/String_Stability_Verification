@@ -9,7 +9,7 @@ plt.rcParams["font.family"] = "Times New Roman"
 # Increase figure resolution
 plt.figure(figsize=(8, 6), dpi=300)  # Higher DPI for better clarity
 
-vis_index = [str(i) for i in range(8)]
+vis_index = [str(230+i) for i in range(3)]
 num_colors = len(vis_index)
 color_map = plt.get_cmap("tab10", num_colors)  # Dynamically get 'tab10' colormap
 color_index = color_map(np.arange(num_colors))  # Assign unique colors
@@ -28,7 +28,7 @@ for index in range(len(vis_index)):
              color=color_index[index], label="Iter " + str(index))  # Assign different colors
 
 # Update legend with two columns
-plt.legend(ncol=2, fontsize=10, loc="upper right")
+plt.legend(ncol=2, fontsize=10, loc="upper left")
 
 # Set axis labels
 plt.xlabel("Training Step", fontsize=14)
