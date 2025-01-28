@@ -243,7 +243,7 @@ class StringStabilityTrainer(pl.LightningModule):
                 original_controls.append(None)
         
         control_dist = torch.square(original_controls[1] - controls[1]).mean()/3000
-        value_dist = torch.relu(-(10 + self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()/6000
+        value_dist = torch.relu(-(10 + self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()/10000
 
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
@@ -331,8 +331,9 @@ class StringStabilityTrainer(pl.LightningModule):
         if self.current_index == 0:
             loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + 100*torch.relu(coef_cons).mean() #+ control_dist #+ value_dist 
         else: 
-            self.V_net.coupling_matrix.coupling_matrix.requires_grad = False
-            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist + value_dist #+ reward_related_loss  + 100*torch.relu(coef_cons).mean() 
+            #if torch.any(coef_cons)>=-0.001:
+            #    self.V_net.coupling_matrix.coupling_matrix.requires_grad = False
+            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist + value_dist+ 100*torch.relu(coef_cons).mean()  #+ reward_related_loss  
         
         # Update networks
         opt.zero_grad()
@@ -380,7 +381,7 @@ class StringStabilityTrainer(pl.LightningModule):
 
 class PlatoonDataModule(pl.LightningDataModule):
     def __init__(self, num_vehicles, cav_indices, dynamics_params, 
-                 batch_size=16, num_samples=3000):
+                 batch_size=16, num_samples=5000):
         super().__init__()
         self.num_vehicles = num_vehicles
         self.cav_indices = cav_indices

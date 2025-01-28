@@ -30,11 +30,11 @@ dynamics_params = {
 }
 
 # Training parameters
-learning_rate = 1e-4
+learning_rate = 1e-3
 batch_size = 32
 num_epochs = 10
 
-max_iters = 10000
+max_iters = 100
 
 # File paths
 index = 0
@@ -86,7 +86,7 @@ num_veri_time_list.append(diff_ver_time.seconds)
 
 while (len(ret) > 0) and (index < max_iters):
     index += 1
-    learning_rate = learning_rate / 2
+    learning_rate = learning_rate * 0.9
 
     st_train_time = datetime.now()
     controllers, system, V_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 

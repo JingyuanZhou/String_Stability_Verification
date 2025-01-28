@@ -47,7 +47,7 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v7.ckpt')
+check_point = torch.load(f'model_weights/best_model-v229.ckpt')
 parameters = check_point['state_dict']
 # 重新映射参数键名
 pre_trained_id = 90
@@ -207,7 +207,7 @@ for vehicle_idx in range(num_vehicles-1):
     ax.set_zlabel('Lyapunov Function', fontsize=14, labelpad=10)
     ax.view_init(elev=30, azim=45)  # 优化视角
     plt.tight_layout()
-    if i == 0:
+    if vehicle_idx == 0:
         fig2.savefig('output_figures/lyapunov_3d_CAV.pdf', format='pdf', bbox_inches='tight', dpi=300)
     else:
         fig2.savefig('output_figures/lyapunov_3d_HDV.pdf', format='pdf', bbox_inches='tight', dpi=300)
