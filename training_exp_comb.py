@@ -259,8 +259,12 @@ class StringStabilityTrainer(pl.LightningModule):
         for i in range(1, states.shape[1]):  # Skip leading vehicle
             decrease = (V_next[:,i-1] - V_current[:,i-1])
             # Add interconnection terms based on connection matrix
-            decrease += 0.05 * V_current[:,i-1]
-            coef_con = torch.tensor(-0.05, device=V_current.device, dtype=V_current.dtype)
+            if i == 1:
+                aii = 0.05
+            else:
+                aii = 0.05
+            decrease += aii * V_current[:,i-1]
+            coef_con = torch.tensor(-aii, device=V_current.device, dtype=V_current.dtype)
             if if_fixed_coupling:
                 for j in coupling_matrix[i]:
                     if j >= 1:

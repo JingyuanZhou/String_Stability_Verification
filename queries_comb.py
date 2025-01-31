@@ -137,8 +137,11 @@ class VerificationQuery:
 
             # Descent constraint
             ineq3 = MarabouUtils.Equation(MarabouCore.Equation.GE)
-            aii = 0.05
-            epsilon = 0.01
+            if i == 0:
+                aii = 0.05
+            else:
+                aii = 0.05
+            epsilon = 0.001
             ineq3.addAddend(1.0, v_next[i])
             ineq3.addAddend(-1.0 + aii, v_current[i])
             for j in self.system.connections[i+1]:

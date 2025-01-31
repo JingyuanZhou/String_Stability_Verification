@@ -119,8 +119,8 @@ class VectorLyapunovNetwork(nn.Module):
         #R_term_2 = torch.norm(torch.matmul(state_diff_2, self.R2.T), p=1, dim=1)
 
         # calculation of Lyapunov function
-        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.1 #+ R_term_1
-        V_2 = self.network_2(x2) - self.network_2(x_star_2) + 0.1 #+ R_term_2
+        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.01 #+ R_term_1
+        V_2 = self.network_2(x2) - self.network_2(x_star_2) + 0.001 #+ R_term_2
 
         V = torch.cat([V_1, V_2], dim=1)
             
