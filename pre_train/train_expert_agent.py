@@ -97,9 +97,9 @@ def train_expert():
     )
 
     # 创建学习率调度器
-    actor_scheduler = optim.lr_scheduler.StepLR(agent.actor_optimizer, step_size=1000, gamma=0.96)
-    critic_scheduler = optim.lr_scheduler.StepLR(agent.critic_optimizer, step_size=1000, gamma=0.96)
-    alpha_scheduler = optim.lr_scheduler.StepLR(agent.log_alpha_optimizer, step_size=1000, gamma=0.96)
+    actor_scheduler = optim.lr_scheduler.StepLR(agent.actor_optimizer, step_size=1000, gamma=0.98)
+    critic_scheduler = optim.lr_scheduler.StepLR(agent.critic_optimizer, step_size=1000, gamma=0.98)
+    alpha_scheduler = optim.lr_scheduler.StepLR(agent.log_alpha_optimizer, step_size=1000, gamma=0.98)
 
     # 创建经验回放内存
     memory = Memory(args['train']['replay_mem'], args['seed'])

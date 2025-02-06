@@ -183,7 +183,7 @@ class PlatoonEnv(gym.Env):
         # 计算稳定性奖励
         stability = 0
         # calculate a decay weights for stability
-        decay_weights = np.linspace(0.6, 0.1, 2)
+        decay_weights = [0.6, 0.1]
         for i in range(self.cav_index[0], self.cav_index[0]+2):
             stability -= decay_weights[i - self.cav_index[0]] * (self.velocity[i] - self.velocity[i-1])**2
 
