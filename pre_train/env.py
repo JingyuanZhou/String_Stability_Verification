@@ -21,7 +21,7 @@ class PlatoonEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf,
-            shape=(2 * 3,),
+            shape=(2 * self.num_vehicles,),
             dtype=np.float32
         )
         
@@ -152,8 +152,8 @@ class PlatoonEnv(gym.Env):
         
     def get_obs(self):
         return np.concatenate([
-            self.velocity[self.cav_index[0]-1:self.cav_index[0]+2],
-            self.spacing[self.cav_index[0]-1:self.cav_index[0]+2]
+            self.velocity,
+            self.spacing
         ]).astype(np.float32)
     
     def get_states(self):
@@ -183,7 +183,7 @@ class PlatoonEnv(gym.Env):
         # 计算稳定性奖励
         stability = 0
         # calculate a decay weights for stability
-        decay_weights = np.linspace(0.6, 0.1, self.num_vehicles - self.cav_index[0]+1)
+        decay_weights = np.linspace(0.6, 0.1, 2)
         for i in range(self.cav_index[0], self.cav_index[0]+2):
             stability -= decay_weights[i - self.cav_index[0]] * (self.velocity[i] - self.velocity[i-1])**2
 

@@ -24,7 +24,7 @@ def train_expert():
         'env': {
             'num_vehicles': 5,
             'dt': 0.1,
-            'cav_index': [1,3],
+            'cav_index': [1],
             'select_scenario': 0,
         },
         
