@@ -45,6 +45,7 @@ class VectorLyapunovNetwork(nn.Module):
         self.one_state_dim = state_dim[0]
         self.all_state_dim = sum(state_dim)
 
+        # 为4个跟随车辆创建网络
         self.network_1 = nn.Sequential(
             nn.Linear(self.one_state_dim, hidden_dim),
             nn.ReLU(),
@@ -59,70 +60,72 @@ class VectorLyapunovNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
+        self.network_3 = nn.Sequential(
+            nn.Linear(self.one_state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+        self.network_4 = nn.Sequential(
+            nn.Linear(self.one_state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
 
         self.coupling_matrix = GraphCouplingMatrix(self.num_vehicles)
 
+        # 创建选择矩阵
         W1 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
         W2 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
+        W3 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
+        W4 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
         W_star = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
         
-        W1[self.one_state_dim, 0] = 1
-        W1[self.one_state_dim+1, 1] = 1
-
-        W2[2*self.one_state_dim, 0] = 1
-        W2[2*self.one_state_dim+1, 1] = 1
-        W_star[0, 0] = 1
-        W_star[1, 1] = 1
+        # 设置选择矩阵的元素
+        W1[self.one_state_dim:2*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第2辆车
+        W2[2*self.one_state_dim:3*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第3辆车
+        W3[3*self.one_state_dim:4*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第4辆车
+        W4[4*self.one_state_dim:5*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第5辆车
+        W_star[0:self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 参考状态
 
         self.register_buffer('W1', W1)
         self.register_buffer('W2', W2)
+        self.register_buffer('W3', W3)
+        self.register_buffer('W4', W4)
         self.register_buffer('W_star', W_star)
-
-        #self.R1 = self._init_R_matrix(self.one_state_dim)
-        #self.R2 = self._init_R_matrix(self.one_state_dim)
-
-    def _init_R_matrix(self, dim):
-        """Initialize R matrix with SVD parameterization"""
-        U = torch.randn(dim, dim)
-        U, _ = torch.linalg.qr(U)  # Orthonormal U
-        V = torch.randn(dim, dim)
-        V, _ = torch.linalg.qr(V)  # Orthonormal V
-        sigma = torch.ones(dim)  # Initial Σ
-        r = nn.Parameter(torch.randn(dim))  # Learnable r parameters
-        
-        return nn.Parameter(U @ (torch.diag(sigma + r**2)) @ V.T)
 
     def forward(self, x, x_star):
         """
-        计算 Lyapunov 函数值，不使用任何切片或 gather 操作。
+        计算 Lyapunov 函数值
 
         参数:
         - x (Tensor): 输入张量，形状为 [batch_size, all_state_dim]
         - x_star (Tensor): 参考状态张量，形状为 [batch_size, num_star, one_state_dim]
 
         返回:
-        - V (Tensor): Lyapunov 函数值，形状为 [batch_size, 2]
+        - V (Tensor): Lyapunov 函数值，形状为 [batch_size, 4]
         """
-
-        x = x.view(-1, self.all_state_dim)  
+        x = x.view(-1, self.all_state_dim)
         x_star = x_star.view(-1, self.all_state_dim)
 
-
-        x1 = torch.matmul(x, self.W1)
-        x2 = torch.matmul(x, self.W2)
+        # 提取每辆车的状态
+        x1 = torch.matmul(x, self.W1)  # 第2辆车(CAV)
+        x2 = torch.matmul(x, self.W2)  # 第3辆车(HDV)
+        x3 = torch.matmul(x, self.W3)  # 第4辆车(CAV)
+        x4 = torch.matmul(x, self.W4)  # 第5辆车(HDV)
         x_star_1 = torch.matmul(x_star, self.W_star)
-        x_star_2 = torch.matmul(x_star, self.W_star)
 
-        #state_diff_1 = x1 - x_star_1
-        #R_term_1 = torch.norm(torch.matmul(state_diff_1, self.R1.T), p=1, dim=1)
-        #state_diff_2 = x2 - x_star_2
-        #R_term_2 = torch.norm(torch.matmul(state_diff_2, self.R2.T), p=1, dim=1)
+        # 计算每辆车的Lyapunov函数值
+        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.001  # CAV
+        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.001  # HDV
+        V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.001  # CAV
+        V_4 = self.network_4(x4) - self.network_4(x_star_1) + 0.001  # HDV
 
-        # calculation of Lyapunov function
-        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.01 #+ R_term_1
-        V_2 = self.network_2(x2) - self.network_2(x_star_2) + 0.001 #+ R_term_2
-
-        V = torch.cat([V_1, V_2], dim=1)
+        # 组合所有Lyapunov函数值
+        V = torch.cat([V_1, V_2, V_3, V_4], dim=1)
             
         return V
     

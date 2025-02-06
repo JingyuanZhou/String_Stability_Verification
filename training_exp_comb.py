@@ -474,30 +474,24 @@ class PlatoonDataModule(pl.LightningDataModule):
 
 def create_platoon_connections(num_vehicles, cav_indices):
     """
-    Create connection matrix for platoon
-    num_vehicles: total number of vehicles
-    cav_indices: indices of CAVs in the platoon
-    
-    Returns: 
-    Dictionary of dictionaries representing weighted connections
-    {i: {j: weight}} means vehicle i is influenced by vehicle j with weight
+    Create connection matrix for platoon with 5 vehicles
+    num_vehicles: total number of vehicles (5)
+    cav_indices: indices of CAVs in the platoon [1, 3]
     """
     connections = {i: {} for i in range(num_vehicles)}
     
-    # Leading vehicle has no connections
+    # Leading vehicle (index 0) has no connections
     
     # Following vehicles
     for i in range(1, num_vehicles):
-        if i in cav_indices:
-            # CAVs can potentially connect to multiple vehicles
-            connections[i][i-1] = 0.01#0.2  # Connection to immediate predecessor
+        if i in cav_indices:  # CAV (vehicle 2 and 4)
+            connections[i][i-1] = 0.01  # Connection to immediate predecessor
             if i > 1:
-                connections[i][i-2] = 0.01#0.1  # Connection to second predecessor
+                connections[i][i-2] = 0.01  # Connection to second predecessor
             if i < num_vehicles - 1:
-                connections[i][i+1] = 0.02#0.2  # Connection to follower
-        else:
-            # HDVs only connect to immediate predecessor
-            connections[i][i-1] = 0.02#0.3
+                connections[i][i+1] = 0.02  # Connection to follower
+        else:  # HDV (vehicle 3 and 5)
+            connections[i][i-1] = 0.02  # Only connect to immediate predecessor
             
     return connections
 
@@ -870,10 +864,10 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
 
 if __name__ == "__main__":
     # System parameters
-    num_vehicles = 3
-    cav_indices = [1]  # Second vehicle is CAV
-    state_dims = [2] * num_vehicles  # Each vehicle has 2 states (position, velocity)
-    control_dims = [1] * num_vehicles  # Each vehicle has 1 control input (acceleration)
+    num_vehicles = 5
+    cav_indices = [1, 3]  # 第二辆和第四辆是CAV
+    state_dims = [2] * num_vehicles  # 每辆车有2个状态 (spacing, velocity)
+    control_dims = [1] * num_vehicles  # 每辆车有1个控制输入 (acceleration)
 
     # Dynamics parameters
     dynamics_params = {
