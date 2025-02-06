@@ -9,8 +9,8 @@ import numpy as np
 warnings.filterwarnings("ignore")
 
 # System parameters
-num_vehicles = 3
-cav_indices = [1]  # Second vehicle is CAV
+num_vehicles = 5
+cav_indices = [1,3]  # Second vehicle is CAV
 state_dims = [2] * num_vehicles
 control_dims = [1] * num_vehicles
 num_ce_list = []
@@ -43,6 +43,8 @@ cur_comb_file = out_comb_folders + f"combined_{index}.onnx"
 pre_trained_id = 90
 pre_trained_model = f"pre_train_model/sac_platoon_{pre_trained_id}_actor.pth"
 pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
+#pre_trained_model = None
+#pre_trained_critics = None
 
 # Train the model
 system_dynamics_network = system_network(state_dim=3)
@@ -68,14 +70,14 @@ diff = end_train_time - st_train_time
 print("Total training time for model index", str(index), ":", str(diff.seconds))
 
 # Convert and combine models
-combined_model(V_net, controllers[1], system_dynamics_network, cur_comb_file, state_dims, cav_indices)
+combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
 
 # Verification
 st_ver_time = datetime.now()
 ret, ret_ranges, failed = safe_descent_cond_check(
     cur_comb_file,
     system=system, 
-    num_agents= 3
+    num_agents= num_vehicles
 )
 end_ver_time = datetime.now()
 diff_ver_time = end_ver_time - st_ver_time
@@ -103,7 +105,7 @@ while (len(ret) > 0) and (index < max_iters):
     ret, ret_ranges, failed = safe_descent_cond_check(
         cur_comb_file, 
         system=system,
-        num_agents= 3
+        num_agents= num_vehicles
     )
     end_ver_time = datetime.now()
     diff_ver_time = end_ver_time - st_ver_time

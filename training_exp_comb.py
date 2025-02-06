@@ -337,7 +337,7 @@ class StringStabilityTrainer(pl.LightningModule):
         else: 
             #if torch.any(coef_cons)>=-0.001:
             #    self.V_net.coupling_matrix.coupling_matrix.requires_grad = False
-            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist + value_dist+ 100*torch.relu(coef_cons).mean()  #+ reward_related_loss  
+            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist + 100*torch.relu(coef_cons).mean()  #+ reward_related_loss  + value_dist
         
         # Update networks
         opt.zero_grad()
@@ -537,7 +537,12 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
                     controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
                 else:
                     controller_parameters[new_key] = v
-        controllers.load_state_dict(controller_parameters)
+        for i in range(len(controllers)):
+            if i in cav_indices:
+                # Remove '1.' prefix from keys
+                corrected_state_dict = {k.replace('1.', ''): v for k, v in controller_parameters.items()}
+                controllers[i].load_state_dict(corrected_state_dict)
+        #controllers.load_state_dict(controller_parameters)
 
     critics = DoubleQCritic(sum(state_dims), control_dims[1])
     if pre_trained_critics is not None:

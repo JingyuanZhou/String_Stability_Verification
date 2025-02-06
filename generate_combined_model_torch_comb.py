@@ -3,12 +3,13 @@ import torch.nn as nn
 import torch.onnx
 from onnxsim import simplify
 import onnx
+from networks import CombinedControllers
 
 class CombinedNetwork(nn.Module):
     def __init__(self, controllers, V_net, cav_indices, state_dims, system_dynamics):
         super(CombinedNetwork, self).__init__()
         self.controllers = controllers
-        self.controllers_temp = controllers
+        self.CombindedControllers = CombinedControllers(controllers)
         self.V_net_1 = V_net
         #self.V_net_2 = V_net
         self.system_dynamics = system_dynamics
@@ -21,13 +22,17 @@ class CombinedNetwork(nn.Module):
         self.hdv_indices = [i for i in range(1, self.num_vehicles) if i not in cav_indices]
 
         # 状态选择矩阵
-        W_state_with_preceding = torch.zeros(2 * self.num_vehicles, 3)
-        for idx, hdv_index in enumerate(self.hdv_indices):
-            base_idx = 2 * hdv_index
-            W_state_with_preceding[base_idx + 1, 2] = 1.0
-            W_state_with_preceding[base_idx, 0] = 1.0
-            W_state_with_preceding[base_idx + 1, 1] = 1.0
-        self.register_buffer('W_state_with_preceding', W_state_with_preceding)
+        W_state_with_preceding_1 = torch.zeros(2 * self.num_vehicles, 3)
+        W_state_with_preceding_1[cav_indices[0] * 2 + 1, 2] = 1.0
+        W_state_with_preceding_1[cav_indices[0] * 2, 0] = 1.0
+        W_state_with_preceding_1[cav_indices[0] * 2 + 1, 1] = 1.0
+        W_state_with_preceding_2 = torch.zeros(2 * self.num_vehicles, 3)
+        W_state_with_preceding_2[cav_indices[1] * 2 + 1, 2] = 1.0
+        W_state_with_preceding_2[cav_indices[1] * 2, 0] = 1.0
+        W_state_with_preceding_2[cav_indices[1] * 2 + 1, 1] = 1.0
+
+        self.register_buffer('W_state_with_preceding_1', W_state_with_preceding_1)
+        self.register_buffer('W_state_with_preceding_2', W_state_with_preceding_2)
 
         # CAV选择矩阵
         W_cav = torch.zeros(self.num_vehicles, len(cav_indices))
@@ -77,12 +82,15 @@ class CombinedNetwork(nn.Module):
         u_star = torch.zeros(1, device=x.device)
         
         # 获取CAV控制输出
-        controllers_output = self.controllers(x, x_stars, u_star, u_bounds)
+        controllers_output = self.CombindedControllers(x, x_stars, u_star, u_bounds)
         
         # 获取HDV加速度
-        x_with_preceding = torch.matmul(x.view(batch_size, -1), self.W_state_with_preceding)
-        hdv_acc = self.system_dynamics(x_with_preceding)
-        
+        x_with_preceding_1 = torch.matmul(x.view(batch_size, -1), self.W_state_with_preceding_1)
+        hdv_acc_1 = self.system_dynamics(x_with_preceding_1)
+        x_with_preceding_2 = torch.matmul(x.view(batch_size, -1), self.W_state_with_preceding_2)
+        hdv_acc_2 = self.system_dynamics(x_with_preceding_2)
+        hdv_acc = torch.cat((hdv_acc_1, hdv_acc_2), dim=1)
+
         # 使用选择矩阵组合加速度
         zero_acc = torch.zeros(batch_size, 1, device=x.device)  # 领航车加速度
         cav_acc = torch.matmul(self.W_cav, controllers_output.transpose(0,1)).transpose(0,1)
@@ -119,7 +127,7 @@ def combined_model(V_net, controllers, system_dynamics, output_file, state_dims,
     torch.save(combined_network, output_file.replace(".onnx", ".pth"))
     # 创建包含所有车辆状态的dummy输入
     #dummy_input_x = torch.randn(1, len(state_dims), state_dims[0],requires_grad=True)  # [1, num_vehicles]
-    dummy_input_x = torch.tensor([[[20,15],[21,14],[21,13]]],requires_grad=True, dtype=torch.float32)  # [1, num_vehicles]
+    dummy_input_x = torch.tensor([[[20,15],[21,14],[21,13],[21,13],[21,13]]],requires_grad=True, dtype=torch.float32)  # [1, num_vehicles]
     
     #print("dummy_input_x", dummy_input_x)
     #output1, output2, output3 = combined_network(dummy_input_x)

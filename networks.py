@@ -41,6 +41,7 @@ class GraphCouplingMatrix(nn.Module):
 class VectorLyapunovNetwork(nn.Module):
     def __init__(self, state_dim, hidden_dim=64):
         super(VectorLyapunovNetwork, self).__init__()
+
         self.num_vehicles = len(state_dim)
         self.one_state_dim = state_dim[0]
         self.all_state_dim = sum(state_dim)
@@ -163,6 +164,22 @@ class NetworkController(nn.Module):
         phi_pi_star = self.network(x_star)
         u = phi_pi- phi_pi_star #torch.clamp(phi_pi, u_min, u_max)# + u_star
         return u
+    
+class CombinedControllers(nn.Module):
+    def __init__(self, controllers):
+        super().__init__()
+        self.controllers = controllers
+        CAV_indices = [1, 3]
+        self.CAV_controller_1 = controllers[CAV_indices[0]]
+        self.CAV_controller_2 = controllers[CAV_indices[1]]
+
+    def forward(self, x, x_star, u_star, u_bounds):
+        """
+        Compute control inputs for all vehicles
+        """
+        u_1 = self.CAV_controller_1(x, x_star, u_star, u_bounds)
+        u_2 = self.CAV_controller_2(x, x_star, u_star, u_bounds)
+        return torch.cat([u_1, u_2], dim=1)
 
 class system_network(nn.Module):
     def __init__(self, state_dim, hidden_dim=30):

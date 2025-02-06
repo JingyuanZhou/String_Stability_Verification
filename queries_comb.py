@@ -126,11 +126,11 @@ class VerificationQuery:
 
             ineq1 = MarabouUtils.Equation(MarabouCore.Equation.LE)
             ineq1.addAddend(1.0, v_current[i])
-            ineq1.setScalar(-0.0001) #0.00001
+            ineq1.setScalar(-0.001) #0.00001
 
             ineq2 = MarabouUtils.Equation(MarabouCore.Equation.LE)
             ineq2.addAddend(1.0, v_next[i])
-            ineq2.setScalar(-0.0001) #
+            ineq2.setScalar(-0.001) #
 
             #network.setLowerBound(v_current[i], 0.0)
             #network.setLowerBound(v_next[i], 0.0)
@@ -168,9 +168,9 @@ class VerificationQuery:
                 counterexample.append([spacing_val, velocity_val])
 
 
-            lya_current = [vals[v_current[0]], vals[v_current[1]]]
-            lya_next = [vals[v_next[0]], vals[v_next[1]]]
-            solved_next_state = [vals[next_state[i]] for i in range(6)]
+            lya_current = [vals[v_current[i]] for i in range(self.num_lyap)]
+            lya_next = [vals[v_next[i]] for i in range(self.num_lyap)]
+            solved_next_state = [vals[next_state[i]] for i in range(self.num_agents*2)]
 
             ground_true = network.evaluateWithoutMarabou([np.array(counterexample)])
             # check counter example
@@ -239,10 +239,11 @@ def safe_descent_cond_check(
     max_vel = 20
     min_vel = 10
 
-    spacing_space_1 = np.linspace(min_spacing, max_spacing, split_num)
-    velocity_space_1 = np.linspace(min_vel, max_vel, split_num)
-    spacing_space_2 = np.linspace(min_spacing, max_spacing, split_num)
-    velocity_space_2 = np.linspace(min_vel, max_vel, split_num)
+    spacing_space = []
+    velocity_space = []
+    for i in range(num_agents-1):
+        spacing_space.append(np.linspace(min_spacing, max_spacing, split_num))
+        velocity_space.append(np.linspace(min_vel, max_vel, split_num))
 
     # 3) 存储验证结果
     vals_found = []       # 用来记录找到的反例
@@ -252,34 +253,41 @@ def safe_descent_cond_check(
     # 4) 两重循环: i in [0..3], k in [0..3] => 个 (spacing, velocity) 区间
     
     idx = 0
-    for i in range(len(spacing_space_1) - 1):  # 0..3
-        for j in range(len(velocity_space_1) - 1):
-            for k in range(len(spacing_space_2) - 1):
-                for l in range(len(velocity_space_2) - 1):
-                    state_bounds = [
-                        [20, 20],   # spacing_头车
-                        [15, 15],   # velocity_头车
-                        # agent=1
-                        [round(spacing_space_1[i], 2),  round(spacing_space_1[i+1], 2)],
-                        [round(velocity_space_1[j], 2),  round(velocity_space_1[j+1], 2)],
-                        # agent=2
-                        [round(spacing_space_2[k], 2),  round(spacing_space_2[k+1], 2)],
-                        [round(velocity_space_2[l], 2),  round(velocity_space_2[l+1], 2)]
-                    ]
+    for i1 in range(len(spacing_space[0]) - 1):  # 0..3
+        for j1 in range(len(velocity_space[0]) - 1):
+            for i2 in range(len(spacing_space[1]) - 1):
+                for j2 in range(len(velocity_space[1]) - 1):
+                    for i3 in range(len(spacing_space[2]) - 1):
+                        for j3 in range(len(velocity_space[2]) - 1):
+                            for i4 in range(len(spacing_space[3]) - 1):
+                                for j4 in range(len(velocity_space[3]) - 1):
+                                    # 5) 定义每个区间的上下界
+                                    state_bounds = [
+                                        [20, 20],   # spacing_头车
+                                        [15, 15],   # velocity_头车
+                                        [round(spacing_space[0][i1], 2), round(spacing_space[0][i1+1], 2)],
+                                        [round(velocity_space[0][j1], 2), round(velocity_space[0][j1+1], 2)],
+                                        [round(spacing_space[1][i2], 2), round(spacing_space[1][i2+1], 2)],
+                                        [round(velocity_space[1][j2], 2), round(velocity_space[1][j2+1], 2)],
+                                        [round(spacing_space[2][i3], 2), round(spacing_space[2][i3+1], 2)],
+                                        [round(velocity_space[2][j3], 2), round(velocity_space[2][j3+1], 2)],
+                                        [round(spacing_space[3][i4], 2), round(spacing_space[3][i4+1], 2)],
+                                        [round(velocity_space[3][j4], 2), round(velocity_space[3][j4+1], 2)]
+                                    ]
 
-                    # 调用 check_descent 
-                    ans = query.check_descent(state_bounds)
-                    print("idx", idx)
-                    idx += 1
-                    # 根据返回值分类
-                    if isinstance(ans, list) and len(ans) > 1:
-                        # sat => ans 是反例
-                        vals_found.append(ans)
-                        val_ranges.append(state_bounds)
-                    elif ans[0] == -1:
-                        # 其他错误 or 超时
-                        failed_vals.append(ans)
-                    # 如果 ans = [1], 表示 "unsat" => 这一块区间无反例
+                                    # 调用 check_descent 
+                                    ans = query.check_descent(state_bounds)
+                                    print("idx", idx)
+                                    idx += 1
+                                    # 根据返回值分类
+                                    if isinstance(ans, list) and len(ans) > 1:
+                                        # sat => ans 是反例
+                                        vals_found.append(ans)
+                                        val_ranges.append(state_bounds)
+                                    elif ans[0] == -1:
+                                        # 其他错误 or 超时
+                                        failed_vals.append(ans)
+                                    # 如果 ans = [1], 表示 "unsat" => 这一块区间无反例，安全    
 
 
     found_count = len(vals_found)     # 有反例的次数
@@ -299,10 +307,10 @@ def safe_descent_cond_check(
     return vals_found, val_ranges, verification_result
 
 if __name__ == "__main__":
-    cur_comb_file = "combined/combined.onnx"
+    cur_comb_file = "combined/combined_0.onnx"
     network = Marabou.read_onnx(cur_comb_file)
 
-    inputs = np.array([[20.0, 15.0], [5.0, 10.0], [10.2, 10.0]])
+    inputs = np.array([[20.0, 15.0], [5.0, 10.0], [10.2, 10.0], [10.2, 10.0], [10.2, 10.0]])
     options = Marabou.createOptions(
         verbosity=2,
         solveWithMILP=True,
@@ -310,11 +318,11 @@ if __name__ == "__main__":
     )
     outputsMarabou = network.evaluateWithMarabou([inputs], options)
     #network.saveQuery("query_2.txt")
-    outputWMarabou = network.evaluateWithoutMarabou([inputs])
+    #outputWMarabou = network.evaluateWithoutMarabou([inputs])
     #pytorch_model = torch.load("combined/combined.pth")
     #pytorch_output = pytorch_model(torch.tensor(inputs, dtype=torch.float32))
     print("outputsMarabou", outputsMarabou)
-    print("evaluateWithoutMarabou", outputWMarabou)
+    #print("evaluateWithoutMarabou", outputWMarabou)
     #print("pytorch_output", pytorch_output)
     
 #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
