@@ -242,8 +242,12 @@ class StringStabilityTrainer(pl.LightningModule):
                 controls.append(None)
                 original_controls.append(None)
         
-        control_dist = torch.square(original_controls[1] - controls[1]).mean()/3000
-        value_dist = torch.relu(-(10 + self.critics(states, controls[1]) - self.critics(states, original_controls[1]))).mean()/10000
+        cav_indices = [1, 3]
+        control_dist = 0
+        value_dist = 0
+        for cav_index in cav_indices:
+            control_dist += torch.square(original_controls[cav_index] - controls[cav_index]).mean()/3000
+            value_dist += torch.relu(-(10 + self.critics(states, controls[cav_index]) - self.critics(states, original_controls[cav_index]))).mean()/10000
 
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
@@ -385,7 +389,7 @@ class StringStabilityTrainer(pl.LightningModule):
 
 class PlatoonDataModule(pl.LightningDataModule):
     def __init__(self, num_vehicles, cav_indices, dynamics_params, 
-                 batch_size=16, num_samples=5000):
+                 batch_size=16, num_samples=10000):
         super().__init__()
         self.num_vehicles = num_vehicles
         self.cav_indices = cav_indices
@@ -636,7 +640,7 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         new_x_stars[..., 0] = 20.0
         new_x_stars[..., 1] = 15.0
 
-        new_data_disturbances = torch.zeros_like(self.counterexamples[:,0,:].squeeze())
+        new_data_disturbances = torch.zeros((self.counterexamples.shape[0],4))
 
         # 添加反例数据
         combined_data_states = torch.cat([old_data_states, self.counterexamples], dim=0)
@@ -804,7 +808,11 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
                     controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
                 else:
                     controller_parameters[new_key] = v
-        original_controllers.load_state_dict(controller_parameters)
+        for i in range(len(controllers)):
+            if i in cav_indices:
+                # Remove '1.' prefix from keys
+                corrected_state_dict = {k.replace('1.', ''): v for k, v in controller_parameters.items()}
+                controllers[i].load_state_dict(corrected_state_dict)
 
     critics = DoubleQCritic(sum(state_dims), control_dims[1])
     if pre_trained_critics is not None:

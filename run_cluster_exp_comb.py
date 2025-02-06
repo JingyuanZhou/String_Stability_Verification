@@ -30,7 +30,7 @@ dynamics_params = {
 }
 
 # Training parameters
-learning_rate = 5e-4
+learning_rate = 3e-4
 batch_size = 32
 num_epochs = 10
 
@@ -40,7 +40,7 @@ max_iters = 100
 index = 0
 out_comb_folders = "combined/"
 cur_comb_file = out_comb_folders + f"combined_{index}.onnx"
-pre_trained_id = 90
+pre_trained_id = 95
 pre_trained_model = f"pre_train_model/sac_platoon_{pre_trained_id}_actor.pth"
 pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
 #pre_trained_model = None
@@ -99,7 +99,7 @@ while (len(ret) > 0) and (index < max_iters):
     diff = end_train_time - st_train_time
     print("Total training time for model index", str(index), ":", str(diff.seconds))
 
-    combined_model(V_net, controllers[1], system_dynamics_network, cur_comb_file, state_dims, cav_indices)
+    combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
 
     st_ver_time = datetime.now()
     ret, ret_ranges, failed = safe_descent_cond_check(

@@ -199,7 +199,8 @@ class VerificationQuery:
 
                 print("counter_example", counterexample, "solved_next_state", solved_next_state,"lya_current", lya_current, "lya_next", lya_next, "expr_ls", expr_ls)
             '''
-            print("Find counter_example", counterexample)
+            #print("Find counter_example", counterexample)
+            print("counter_example", counterexample, "solved_next_state", solved_next_state,"lya_current", lya_current, "lya_next", lya_next)
             return counterexample  # 多维列表
         elif exitCode == "unsat":
             # 不可满足 => 不存在反例 => 安全
@@ -233,7 +234,7 @@ def safe_descent_cond_check(
     # 假设我们希望在 [0, limit_pos]、[0, vel_limit] 范围各划分 5 等份
     # => spacing_space: [0, 10, 20, 30, 40], velocity_space: [0, 7.5, 15, 22.5, 30]
     # => 4 个区间(因为有5个端点)
-    split_num = 4
+    split_num = 3
     max_spacing = 25
     min_spacing = 15
     max_vel = 20

@@ -120,10 +120,10 @@ class VectorLyapunovNetwork(nn.Module):
         x_star_1 = torch.matmul(x_star, self.W_star)
 
         # 计算每辆车的Lyapunov函数值
-        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.001  # CAV
-        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.001  # HDV
-        V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.001  # CAV
-        V_4 = self.network_4(x4) - self.network_4(x_star_1) + 0.001  # HDV
+        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.01  # CAV
+        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.01  # HDV
+        V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.01  # CAV
+        V_4 = self.network_4(x4) - self.network_4(x_star_1) + 0.01  # HDV
 
         # 组合所有Lyapunov函数值
         V = torch.cat([V_1, V_2, V_3, V_4], dim=1)
