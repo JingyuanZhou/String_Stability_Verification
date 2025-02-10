@@ -4,7 +4,7 @@ import lightning.pytorch as pl
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
 from lightning.pytorch.callbacks import ModelCheckpoint
-from networks import NetworkController, VectorLyapunovNetwork, system_network, DoubleQCritic
+from networks import NetworkController, VectorLyapunovNetwork, system_network, DoubleQCritic, VectorBarrierNetwork
 import torch.onnx
 
 class InterconnectedSystem:
@@ -169,12 +169,13 @@ class PlatoonDynamics(InterconnectedSystem):
 
         print("Neural dynamics training completed!")
 
-class StringStabilityTrainer(pl.LightningModule):
-    def __init__(self, V_net, controllers, system, current_index, learning_rate=1e-3, original_controller = None, critics = None):
+class Trainer(pl.LightningModule):
+    def __init__(self, V_net, barrier_net, controllers, system, current_index, learning_rate=1e-3, original_controller = None, critics = None):
         super().__init__()
         self.automatic_optimization = False
         # Save networks as module attributes so they're included in checkpoints
         self.V_net = V_net
+        self.barrier_net = barrier_net
         self.controllers = controllers  # Now it's already a ModuleList
         self.system = system
         self.learning_rate = learning_rate
@@ -203,7 +204,7 @@ class StringStabilityTrainer(pl.LightningModule):
         
         return G
     
-    def vector_lyapunov_conditions(self, states, x_stars, disturbances):
+    def vector_lyapunov_barrier_conditions(self, states, x_stars, disturbances):
         """
         Verify vector Lyapunov conditions for string stability
         
@@ -278,67 +279,51 @@ class StringStabilityTrainer(pl.LightningModule):
             #decrease -= torch.norm(disturbances[i])**2
             V_decreases.append(decrease)
             coef_cons.append(coef_con)
-            
-        return torch.stack(V_decreases), V_current, control_dist, torch.stack(coef_cons), value_dist
 
-    def cal_reward_objective(self, states, x_stars, disturbances):
-        """
-        Calculate reward objective for other objectives
-        """
+        # barrier conditions
+        def check_safety(states):
+            tau = 0.3
+            margin = 0.01
+            h = (states[:,1:,0] - tau*states[:,1:,1]).squeeze()
+            masked_h = torch.zeros_like(h)
+            masked_h[h > margin] = 1
+            masked_h[h <= margin] = -1
+            return masked_h
 
-        spacing = states[:, :, 0]
-        velocity = states[:, :, 1]
-        cav_index = 1
+        barrier_value = self.barrier_net(states, x_stars)
+        barrier_next = self.barrier_net(next_states, x_stars)
+        label = check_safety(states)
+        gamma = 1e-3
+        loss_barrier = 0
+        temp_matrix = torch.tensor([[-1,0.2,0.1],[0.2,-1,0.1],[0.1,0.2,-1]], device=states.device, dtype=states.dtype)
 
-        '''
-        ttc = spacing[:,cav_index] / (velocity[:,cav_index-1] - velocity[:,cav_index] + 1e-6)
-        safety_list = []
+        # safe region loss
+        loss_barrier += torch.relu(gamma-barrier_value[label==1]).mean()
+        loss_barrier += torch.relu(gamma+barrier_value[label==-1]).mean()
 
-        for i in range(0, states.shape[0]):
-            if 0 < ttc[i] < 4:
-                safety = torch.log(ttc[i] / 4)
-            else:
-                safety = 0
-            safety_list.append(safety)
+        loss_barrier += torch.relu(barrier_value@temp_matrix - (barrier_next - barrier_value)).mean()
 
-        efficiency_list = []
-        for i in range(0, states.shape[1]):
-            efficiency = 0
-            if self.spacing[i,1]/self.velocity[i,1] > 2.5:  # 车距过大惩罚
-                efficiency -= 2.5
-            efficiency_list.append(efficiency)
-        '''
+        return torch.stack(V_decreases), V_current, loss_barrier, control_dist, torch.stack(coef_cons), value_dist
 
-        #stability = 0
-        # calculate a decay weights for stability
-        #decay_weights = np.linspace(0.6, 0.1, 3 - cav_index)
-        #for i in range(cav_index, cav_index+2):
-        #    stability = decay_weights[i - cav_index] * (velocity[:,i] - velocity[:,i-1])**2
-
-        reward_weights = [0.3, 0.3, 0.1]
-
-        reward = 0#reward_weights[2] * stability.mean()
-        
-        return reward
 
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
+
         
         states, x_stars, disturbances = batch
 
         # Compute vector Lyapunov conditions
         epsilon = 1e-2
-        V_decreases, V_current, control_dist, coef_cons, value_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
+        V_decreases, V_current, loss_barrier, control_dist, coef_cons, value_dist = self.vector_lyapunov_barrier_conditions(states, x_stars, disturbances)
 
-        reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
 
         # Compute loss ensuring string stability conditions
         if self.current_index == 0:
-            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() #+ 100*torch.relu(coef_cons).mean() #+ control_dist #+ value_dist 
+            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + loss_barrier #+ 100*torch.relu(coef_cons).mean() #+ control_dist #+ value_dist 
         else: 
             #if torch.any(coef_cons)>=-0.001:
             #self.V_net.coupling_matrix.coupling_matrix.requires_grad = False
-            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist + value_dist #+ 100*torch.relu(coef_cons).mean() #+ reward_related_loss  
+            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist + value_dist + loss_barrier #+ 100*torch.relu(coef_cons).mean() #+ reward_related_loss  
         
         # Update networks
         opt.zero_grad()
@@ -349,19 +334,20 @@ class StringStabilityTrainer(pl.LightningModule):
         self.log("train_loss", loss, prog_bar=True)  # Show in progress bar
         self.log("loss_decrease", 5*torch.relu(V_decreases).mean(), prog_bar=True)
         self.log("loss_positive", 10*torch.relu(-V_current).mean(), prog_bar=True)
-        
+        self.log("loss_barrier", loss_barrier, prog_bar=True)
+
         return loss
 
     def validation_step(self, batch, batch_idx):
         
         states, x_stars, disturbances = batch
         epsilon = 1e-2
-        reward_related_loss = self.cal_reward_objective(states, x_stars, disturbances)
-        V_decreases, V_current, control_dist, coef_cons, value_dist = self.vector_lyapunov_conditions(states, x_stars, disturbances)
+        V_decreases, V_current, loss_barrier, control_dist, coef_cons, value_dist = self.vector_lyapunov_barrier_conditions(states, x_stars, disturbances)
         if self.current_index == 0:
-            val_loss = 10 * torch.relu(-V_current+epsilon).mean() +  5*torch.relu(V_decreases + epsilon).mean() # +control_dist+ value_dist + torch.relu(coef_cons).mean()
+
+            val_loss = 10 * torch.relu(-V_current+epsilon).mean() +  5*torch.relu(V_decreases + epsilon).mean() + loss_barrier # +control_dist+ value_dist + torch.relu(coef_cons).mean()
         else: 
-            val_loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() #+ control_dist+ value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
+            val_loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + loss_barrier #+ control_dist+ value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
         
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
@@ -398,7 +384,7 @@ class PlatoonDataModule(pl.LightningDataModule):
         self.spacing_range = (5, 35.0)  # Centered around desired_spacing
         self.vel_range = (5.0, 25.0)
         self.dist_range = (-0.5, 0.5)
-        
+
     def _generate_samples(self):
         """Generate random samples for training"""
         states = []
@@ -432,9 +418,11 @@ class PlatoonDataModule(pl.LightningDataModule):
             # Generate disturbances
             dist = torch.zeros(self.num_samples)#torch.FloatTensor(self.num_samples).uniform_(*self.dist_range)
             disturbances.append(dist)
+
             
         return states, x_stars, disturbances
     
+
     def setup(self, stage=None):
         # Generate data
         states, x_stars, disturbances = self._generate_samples()
@@ -532,6 +520,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
 
     # Initialize networks
     V_net = VectorLyapunovNetwork(state_dims, G)
+    barrier_net = VectorBarrierNetwork(state_dims)
     controllers = nn.ModuleList([
         NetworkController(sum(state_dims), control_dims[i]) if i in cav_indices 
         else nn.Identity() for i in range(num_vehicles)
@@ -568,7 +557,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
                                   batch_size=batch_size)
 
     # Initialize trainer
-    trainer = StringStabilityTrainer(V_net, controllers, system, 
+    trainer = Trainer(V_net, barrier_net, controllers, system, 
                                    learning_rate=learning_rate, current_index = index, original_controller = controllers, critics = critics)
 
     checkpoint_callback = ModelCheckpoint(
@@ -591,6 +580,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     # load new controllers and V_net
     controllers = trainer.controllers
     V_net = trainer.V_net
+    barrier_net = trainer.barrier_net
 
     # Update system connections
     # Convert current dictionary connections to a binary adjacency matrix
@@ -612,7 +602,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     print("New connections: ", new_connections)
     system.connections = new_connections
 
-    return controllers, system, V_net
+    return controllers, system, V_net, barrier_net
 
 class PlatoonDataModuleRetrain(pl.LightningDataModule):
     def __init__(self, epoch, counterexamples, counterexample_ranges, batch_size=32, 
@@ -747,7 +737,7 @@ def add_noise_to_counterexamples(counterexamples):
 
 def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system,
                  counterexamples, counterexample_ranges, epoch,
-                 in_model, in_controller,
+                 in_model, in_barrier_net, in_controller,
                  learning_rate=1e-4, batch_size=32, index = 0, pre_trained_model = None, pre_trained_critics = None, combined_model_path = None):
     """
     Retrain the platoon control system using counterexamples
@@ -777,6 +767,7 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
 
     # Use provided networks directly
     V_net = in_model
+    barrier_net = in_barrier_net
     controllers = in_controller
 
     # Initialize system dynamics
@@ -821,9 +812,9 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
         critics.load_state_dict(raw_parameters_critics)
 
     # Initialize trainer for retraining
-    trainer = StringStabilityTrainer(V_net, controllers, system, 
+    trainer = Trainer(V_net, barrier_net, controllers, system, 
                                 learning_rate=learning_rate, current_index = index, original_controller = original_controllers, critics = critics)
-    #trainer = StringStabilityTrainerRetrain(
+    #trainer = TrainerRetrain(
     #    V_net, controllers,
     #    primal_learning_rate=learning_rate
     #)
@@ -848,7 +839,7 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
     pl_trainer.fit(trainer, data_module)
     controllers = trainer.controllers
     V_net = trainer.V_net
-
+    barrier_net = trainer.barrier_net
         # Update system connections
     # Convert current dictionary connections to a binary adjacency matrix
     G = torch.zeros(len(system.connections), len(system.connections))
@@ -873,13 +864,13 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
     system.connections = new_connections
 
     
-    return controllers, system, V_net
+    return controllers, system, V_net, barrier_net
 
 
 if __name__ == "__main__":
     # System parameters
-    num_vehicles = 5
-    cav_indices = [1, 3]  # 第二辆和第四辆是CAV
+    num_vehicles = 4
+    cav_indices = [1, 2, 3]  # 第二辆和第四辆是CAV
     state_dims = [2] * num_vehicles  # 每辆车有2个状态 (spacing, velocity)
     control_dims = [1] * num_vehicles  # 每辆车有1个控制输入 (acceleration)
 
@@ -899,10 +890,10 @@ if __name__ == "__main__":
     # Training parameters
     learning_rate = 1e-3
     batch_size = 32
-    num_epochs = 100
+    num_epochs = 5
 
     # Train the model
-    controllers, system, V_net = train_model(
+    controllers, system, V_net, barrier_net = train_model(
         num_vehicles=num_vehicles,
         cav_indices=cav_indices,
         state_dims=state_dims,

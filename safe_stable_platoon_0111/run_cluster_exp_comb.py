@@ -9,8 +9,8 @@ import numpy as np
 warnings.filterwarnings("ignore")
 
 # System parameters
-num_vehicles = 5
-cav_indices = [1,3]  # Second vehicle is CAV
+num_vehicles = 4
+cav_indices = [1,2,3]  # Second vehicle is CAV
 state_dims = [2] * num_vehicles
 control_dims = [1] * num_vehicles
 num_ce_list = []
@@ -50,7 +50,7 @@ pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
 system_dynamics_network = system_network(state_dim=3)
 
 st_train_time = datetime.now()
-controllers, system, V_net = train_model(
+controllers, system, V_net, barrier_net = train_model(
     num_vehicles=num_vehicles,
     cav_indices=cav_indices,
     state_dims=state_dims,
@@ -91,9 +91,9 @@ while (len(ret) > 0) and (index < max_iters):
     learning_rate = learning_rate * 0.9
 
     st_train_time = datetime.now()
-    controllers, system, V_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 
+    controllers, system, V_net, barrier_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 
                                                control_dims=control_dims, in_system=system, counterexamples=torch.Tensor(ret), 
-                                               counterexample_ranges=ret_ranges, epoch=num_epochs, in_model= V_net, learning_rate=learning_rate,
+                                               counterexample_ranges=ret_ranges, epoch=num_epochs, in_model= V_net, in_barrier_net=barrier_net, learning_rate=learning_rate,
                                                in_controller = controllers, index = index, pre_trained_model=pre_trained_model, pre_trained_critics = pre_trained_critics, combined_model_path=cur_comb_file)
     end_train_time = datetime.now()
     diff = end_train_time - st_train_time

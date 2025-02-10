@@ -8,7 +8,7 @@ import os
 
 # 初始化系统参数
 num_vehicles = 5
-cav_indices = [1,3]  # 第二辆车是CAV
+cav_indices = [1,2,3]  # 第二辆车是CAV
 dynamics_params = {
     'dt': 0.1,
     'alpha': 0.6,
@@ -243,7 +243,7 @@ for vehicle_idx in range(2):#num_vehicles-1
 values_new_controller = np.zeros((len(spacing_space), len(velocity_space)))
 value_origin_controller = np.zeros((len(spacing_space), len(velocity_space)))
 
-pre_trained_model = "pre_train_model/sac_platoon_90_actor.pth"
+pre_trained_model = "pre_train_model/sac_platoon_99_actor.pth"
 raw_parameters = torch.load(pre_trained_model)
 original_controller_parameters = {}
 for k, v in raw_parameters.items():

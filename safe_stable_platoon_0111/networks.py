@@ -82,13 +82,6 @@ class VectorLyapunovNetwork(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, 1)
         )
-        self.network_4 = nn.Sequential(
-            nn.Linear(self.one_state_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 1)
-        )
 
         self.coupling_matrix = GraphCouplingMatrix(self.num_vehicles, G)
 
@@ -96,21 +89,20 @@ class VectorLyapunovNetwork(nn.Module):
         W1 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
         W2 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
         W3 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
-        W4 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
         W_star = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
         
         # 设置选择矩阵的元素
         W1[self.one_state_dim:2*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第2辆车
         W2[2*self.one_state_dim:3*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第3辆车
         W3[3*self.one_state_dim:4*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第4辆车
-        W4[4*self.one_state_dim:5*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第5辆车
         W_star[0:self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 参考状态
+
 
         self.register_buffer('W1', W1)
         self.register_buffer('W2', W2)
         self.register_buffer('W3', W3)
-        self.register_buffer('W4', W4)
         self.register_buffer('W_star', W_star)
+
 
     def forward(self, x, x_star):
         """
@@ -130,20 +122,84 @@ class VectorLyapunovNetwork(nn.Module):
         x1 = torch.matmul(x, self.W1)  # 第2辆车(CAV)
         x2 = torch.matmul(x, self.W2)  # 第3辆车(HDV)
         x3 = torch.matmul(x, self.W3)  # 第4辆车(HDV)
-        x4 = torch.matmul(x, self.W4)  # 第5辆车(HDV)
         x_star_1 = torch.matmul(x_star, self.W_star)
+
 
         # 计算每辆车的Lyapunov函数值
         V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.1  # CAV
         V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.1  # HDV
         V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.1  # CAV
-        V_4 = self.network_4(x4) - self.network_4(x_star_1) + 0.1  # HDV
+
 
         # 组合所有Lyapunov函数值
-        V = torch.cat([V_1, V_2, V_3, V_4], dim=1)
+        V = torch.cat([V_1, V_2, V_3], dim=1)
             
+
         return V
+
+class VectorBarrierNetwork(nn.Module):
+    def __init__(self, state_dim, hidden_dim=64):
+        super(VectorBarrierNetwork, self).__init__()
+
+        self.num_vehicles = len(state_dim)
+        self.one_state_dim = state_dim[0]
+        self.all_state_dim = sum(state_dim)
+
+        self.network_1 = nn.Sequential(
+            nn.Linear(self.one_state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+        self.network_2 = nn.Sequential(
+            nn.Linear(self.one_state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+        self.network_3 = nn.Sequential(
+            nn.Linear(self.one_state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1)
+        )
+
+                # 创建选择矩阵
+        W1 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
+        W2 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
+        W3 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
+        
+        # 设置选择矩阵的元素
+        W1[self.one_state_dim:2*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第2辆车
+        W2[2*self.one_state_dim:3*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第3辆车
+        W3[3*self.one_state_dim:4*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第4辆车
+
+        self.register_buffer('W1', W1)
+        self.register_buffer('W2', W2)
+        self.register_buffer('W3', W3)
     
+    def forward(self, x, x_star):
+        """
+        Compute barrier function value
+        """
+        x = x.view(-1, self.all_state_dim)
+        x_star = x_star.view(-1, self.all_state_dim)
+
+        x_1 = torch.matmul(x, self.W1)
+        x_2 = torch.matmul(x, self.W2)
+        x_3 = torch.matmul(x, self.W3)
+
+        h_1 = self.network_1(x_1)
+        h_2 = self.network_2(x_2)
+        h_3 = self.network_3(x_3)
+
+        h = torch.cat([h_1, h_2, h_3], dim=1)
+
+        return h
+
 
 class NetworkController(nn.Module):
     def __init__(self, state_dim, control_dim, hidden_dim=30):
@@ -157,17 +213,15 @@ class NetworkController(nn.Module):
         )
         self.state_dim = state_dim
         self.W_change_state_position = torch.zeros(self.state_dim, self.state_dim, requires_grad=False)
-        #index from 0 1 2 3 4 5 6 7 8 9 to 1 3 5 7 9 0 2 4 6 8 
+        #index from 0 1 2 3 4 5 6 7 to 1 3 5 7 0 2 4 6
         self.W_change_state_position[1, 0] = 1
         self.W_change_state_position[3, 1] = 1
         self.W_change_state_position[5, 2] = 1
         self.W_change_state_position[7, 3] = 1
-        self.W_change_state_position[9, 4] = 1
-        self.W_change_state_position[0, 5] = 1
-        self.W_change_state_position[2, 6] = 1
-        self.W_change_state_position[4, 7] = 1
-        self.W_change_state_position[6, 8] = 1
-        self.W_change_state_position[8, 9] = 1
+        self.W_change_state_position[0, 4] = 1
+        self.W_change_state_position[2, 5] = 1
+        self.W_change_state_position[4, 6] = 1
+        self.W_change_state_position[6, 7] = 1
         
     def forward(self, x, x_star, u_star, u_bounds):
         """
@@ -189,9 +243,10 @@ class CombinedControllers(nn.Module):
     def __init__(self, controllers):
         super().__init__()
         self.controllers = controllers
-        CAV_indices = [1,3]
+        CAV_indices = [1,2,3]
         self.CAV_controller_1 = controllers[CAV_indices[0]]
         self.CAV_controller_2 = controllers[CAV_indices[1]]
+        self.CAV_controller_3 = controllers[CAV_indices[2]]
 
     def forward(self, x, x_star, u_star, u_bounds):
         """
@@ -199,9 +254,10 @@ class CombinedControllers(nn.Module):
         """
         u_1 = self.CAV_controller_1(x, x_star, u_star, u_bounds)
         u_2 = self.CAV_controller_2(x, x_star, u_star, u_bounds)
-
-        u = torch.cat([u_1, u_2], dim=1)
+        u_3 = self.CAV_controller_3(x, x_star, u_star, u_bounds)
+        u = torch.cat([u_1, u_2, u_3], dim=1)
         return u
+
 
 class system_network(nn.Module):
     def __init__(self, state_dim, hidden_dim=30):
