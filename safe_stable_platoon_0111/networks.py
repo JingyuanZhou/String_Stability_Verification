@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+import torch.nn.functional as F
 
 class GraphCouplingMatrix(nn.Module):
     def __init__(self, N, G):
@@ -51,6 +52,36 @@ class GraphCouplingMatrix(nn.Module):
         A_final = A_masked + A_diag  
 
         return A_final
+
+class CBFCouplingMatrix(nn.Module):
+    def __init__(self, q):
+        """
+        初始化耦合矩阵参数。
+        
+        参数:
+            q (int): 子系统个数，对应矩阵的维度 q x q。
+        """
+        super(CBFCouplingMatrix, self).__init__()
+        self.q = q
+        # 定义一个无约束参数矩阵 tilde_Upsilon，其形状为 (q, q)
+        self.tilde_Upsilon = nn.Parameter(torch.randn(q, q))
+    
+    def forward(self):
+        """
+        根据无约束参数矩阵 tilde_Upsilon 计算出满足要求的耦合矩阵 Upsilon，
+        非对角元取 softplus 保证非负，对角元取 -softplus 保证严格为负。
+        
+        返回:
+            Upsilon (Tensor): 形状为 (q, q) 的耦合矩阵。
+        """
+        # 对所有元素都应用 softplus
+        Upsilon = F.softplus(self.tilde_Upsilon)
+        
+        # 对角元素取负
+        diag_indices = torch.arange(self.q, device=Upsilon.device)
+        Upsilon[diag_indices, diag_indices] = -Upsilon[diag_indices, diag_indices]
+        
+        return Upsilon
 
 class VectorLyapunovNetwork(nn.Module):
     def __init__(self, state_dim, G, hidden_dim=64):
@@ -144,6 +175,7 @@ class VectorBarrierNetwork(nn.Module):
         self.num_vehicles = len(state_dim)
         self.one_state_dim = state_dim[0]
         self.all_state_dim = sum(state_dim)
+        self.coupling_matrix = CBFCouplingMatrix(self.num_vehicles - 1)
 
         self.network_1 = nn.Sequential(
             nn.Linear(self.one_state_dim, hidden_dim),

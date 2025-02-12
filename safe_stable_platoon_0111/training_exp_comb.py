@@ -282,7 +282,7 @@ class Trainer(pl.LightningModule):
 
         # barrier conditions
         def check_safety(states):
-            tau = 0.3
+            tau = 0.5
             margin = 0.01
             h = (states[:,1:,0] - tau*states[:,1:,1]).squeeze()
             masked_h = torch.zeros_like(h)
@@ -294,15 +294,26 @@ class Trainer(pl.LightningModule):
         barrier_next = self.barrier_net(next_states, x_stars)
         label = check_safety(states)
         gamma = 1e-3
-        loss_barrier = 0
-        temp_matrix = torch.tensor([[-1,0.2,0.1],[0.2,-1,0.1],[0.1,0.2,-1]], device=states.device, dtype=states.dtype)
+        # temp_matrix = torch.tensor([[-0.1,0.02,0.01],[0.02,-0.1,0.01],[0.01,0.02,-0.1]], device=states.device, dtype=states.dtype)
 
         # safe region loss
-        loss_barrier += torch.relu(gamma-barrier_value[label==1]).mean()
-        loss_barrier += torch.relu(gamma+barrier_value[label==-1]).mean()
+        safe_mask = (label == 1)
+        if safe_mask.sum() > 0:
+            loss_barrier_safe = torch.relu(gamma - barrier_value[safe_mask]).mean()
+        else:
+            loss_barrier_safe = torch.tensor(0., device=states.device, dtype=states.dtype)
 
-        loss_barrier += torch.relu(barrier_value@temp_matrix - (barrier_next - barrier_value)).mean()
+        unsafe_mask = (label == -1)
+        if unsafe_mask.sum() > 0:
+            loss_barrier_unsafe = torch.relu(gamma + barrier_value[unsafe_mask]).mean()
+        else:
+            loss_barrier_unsafe = torch.tensor(0., device=states.device, dtype=states.dtype)
+        loss_barrier_derivative = torch.relu(barrier_value@self.barrier_net.coupling_matrix() - (barrier_next - barrier_value)).mean()
 
+        loss_barrier_coef = torch.tensor([0.1,0.1,0.05], device=states.device, dtype=states.dtype)
+        loss_barrier = loss_barrier_coef[0] * loss_barrier_safe + loss_barrier_coef[1] * loss_barrier_unsafe + loss_barrier_coef[2] * loss_barrier_derivative
+        if torch.isnan(loss_barrier).any():
+            print("loss_barrier_safe: ", loss_barrier_safe, "loss_barrier_unsafe: ", loss_barrier_unsafe, "loss_barrier_derivative: ", loss_barrier_derivative)
         return torch.stack(V_decreases), V_current, loss_barrier, control_dist, torch.stack(coef_cons), value_dist
 
 
@@ -360,6 +371,7 @@ class Trainer(pl.LightningModule):
         
         # Add V_net parameters
         parameters.extend(self.V_net.parameters())
+        parameters.extend(self.barrier_net.parameters())
         
         if self.current_index > 1:
             # Add controller parameters using index

@@ -22,7 +22,7 @@ def train_expert():
         
         # 环境参数
         'env': {
-            'num_vehicles': 5,
+            'num_vehicles': 4,
             'dt': 0.1,
             'cav_index': [1],
             'select_scenario': 0,

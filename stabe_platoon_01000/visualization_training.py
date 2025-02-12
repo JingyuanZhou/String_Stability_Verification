@@ -2,6 +2,12 @@ from tbparse import SummaryReader
 import matplotlib.pyplot as plt
 import numpy as np
 
+num_ce_list = np.load("data/num_ce_list.npy")
+num_veri_time_list = np.load("data/num_veri_time_list.npy")
+
+print(num_ce_list)
+print(num_veri_time_list)
+
 plt.style.use('seaborn-white')  # 使用清爽的背景样式
 # Set font to Times New Roman
 plt.rcParams["font.family"] = "Times New Roman"
@@ -50,8 +56,3 @@ plt.savefig("output_figures/train_loss_plot.pdf", format="pdf", dpi=300, bbox_in
 # Show plot
 plt.show()
 
-num_ce_list = np.load("data/num_ce_list.npy")
-num_veri_time_list = np.load("data/num_veri_time_list.npy")
-
-print(num_ce_list)
-print(num_veri_time_list)

@@ -228,7 +228,7 @@ def safe_descent_cond_check(
     # 假设我们希望在 [0, limit_pos]、[0, vel_limit] 范围各划分 5 等份
     # => spacing_space: [0, 10, 20, 30, 40], velocity_space: [0, 7.5, 15, 22.5, 30]
     # => 4 个区间(因为有5个端点)
-    split_num = [3,3,3,3]
+    split_num = [3,3,3]
     max_spacing = 25
     min_spacing = 15
     max_vel = 20
@@ -255,35 +255,31 @@ def safe_descent_cond_check(
                 for j2 in range(len(velocity_space[1]) - 1):
                     for i3 in range(len(spacing_space[2]) - 1):
                         for j3 in range(len(velocity_space[2]) - 1):
-                            for i4 in range(len(spacing_space[3]) - 1):
-                                for j4 in range(len(velocity_space[3]) - 1):
-                                    # 5) 定义每个区间的上下界
-                                    state_bounds = [
-                                        [20, 20],   # spacing_头车
-                                        [15, 15],   # velocity_头车
-                                        [round(spacing_space[0][i1], 2), round(spacing_space[0][i1+1], 2)],
-                                        [round(velocity_space[0][j1], 2), round(velocity_space[0][j1+1], 2)],
-                                        [round(spacing_space[1][i2], 2), round(spacing_space[1][i2+1], 2)],
-                                        [round(velocity_space[1][j2], 2), round(velocity_space[1][j2+1], 2)],
-                                        [round(spacing_space[2][i3], 2), round(spacing_space[2][i3+1], 2)],
-                                        [round(velocity_space[2][j3], 2), round(velocity_space[2][j3+1], 2)],
-                                        [round(spacing_space[3][i4], 2), round(spacing_space[3][i4+1], 2)],
-                                        [round(velocity_space[3][j4], 2), round(velocity_space[3][j4+1], 2)]
-                                    ]
+                                # 5) 定义每个区间的上下界
+                                state_bounds = [
+                                    [20, 20],   # spacing_头车
+                                    [15, 15],   # velocity_头车
+                                    [round(spacing_space[0][i1], 2), round(spacing_space[0][i1+1], 2)],
+                                    [round(velocity_space[0][j1], 2), round(velocity_space[0][j1+1], 2)],
+                                    [round(spacing_space[1][i2], 2), round(spacing_space[1][i2+1], 2)],
+                                    [round(velocity_space[1][j2], 2), round(velocity_space[1][j2+1], 2)],
+                                    [round(spacing_space[2][i3], 2), round(spacing_space[2][i3+1], 2)],
+                                    [round(velocity_space[2][j3], 2), round(velocity_space[2][j3+1], 2)],
+                                ]
 
-                                    # 调用 check_descent 
-                                    ans = query.check_descent(state_bounds)
-                                    print("idx", idx)
-                                    idx += 1
-                                    # 根据返回值分类
-                                    if isinstance(ans, list) and len(ans) > 1:
-                                        # sat => ans 是反例
-                                        vals_found.append(ans)
-                                        val_ranges.append(state_bounds)
-                                    elif ans[0] == -1:
-                                        # 其他错误 or 超时
-                                        failed_vals.append(ans)
-                                    # 如果 ans = [1], 表示 "unsat" => 这一块区间无反例，安全    
+                                # 调用 check_descent 
+                                ans = query.check_descent(state_bounds)
+                                print("idx", idx)
+                                idx += 1
+                                # 根据返回值分类
+                                if isinstance(ans, list) and len(ans) > 1:
+                                    # sat => ans 是反例
+                                    vals_found.append(ans)
+                                    val_ranges.append(state_bounds)
+                                elif ans[0] == -1:
+                                    # 其他错误 or 超时
+                                    failed_vals.append(ans)
+                                # 如果 ans = [1], 表示 "unsat" => 这一块区间无反例，安全    
 
 
     found_count = len(vals_found)     # 有反例的次数

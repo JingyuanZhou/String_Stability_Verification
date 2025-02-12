@@ -98,7 +98,7 @@ def combined_model(V_net, controllers, system_dynamics, output_file, state_dims,
     torch.save(combined_network, output_file.replace(".onnx", ".pth"))
     # 创建包含所有车辆状态的dummy输入
     #dummy_input_x = torch.randn(1, len(state_dims), state_dims[0],requires_grad=True)  # [1, num_vehicles]
-    dummy_input_x = torch.tensor([[[20,15],[21,14],[21,13],[21,13],[21,13]]],requires_grad=True, dtype=torch.float32)  # [1, num_vehicles]
+    dummy_input_x = torch.tensor([[[20,15],[21,14],[21,13],[21,13]]],requires_grad=True, dtype=torch.float32)  # [1, num_vehicles]
     
     #print("dummy_input_x", dummy_input_x)
     #output1, output2, output3 = combined_network(dummy_input_x)
