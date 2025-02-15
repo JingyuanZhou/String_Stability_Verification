@@ -6,15 +6,17 @@ import numpy as np
 from lightning.pytorch.callbacks import ModelCheckpoint
 from networks import NetworkController, VectorLyapunovNetwork, system_network, DoubleQCritic, VectorBarrierNetwork
 import torch.onnx
+import copy
 
 class InterconnectedSystem:
-    def __init__(self, dynamics_params, connection_matrix):
+    def __init__(self, dynamics_params, connection_matrix, CBF_coupling_matrix=None):
         """
         dynamics_params: parameters for system dynamics
         connection_matrix: adjacency matrix showing system interconnections
         """
         self.params = dynamics_params
         self.connections = connection_matrix
+        self.CBF_coupling_matrix = CBF_coupling_matrix
         
     def next_state(self, states, controls, disturbances):
         """
@@ -181,6 +183,7 @@ class Trainer(pl.LightningModule):
         self.learning_rate = learning_rate
         self.current_index = current_index
         self.original_controller = original_controller
+        self.original_controller.eval()
         self.critics = critics
         self.dt = 0.1
         
@@ -212,27 +215,19 @@ class Trainer(pl.LightningModule):
         x_stars: [batch_size, num_vehicles, 2]
         disturbances: [batch_size, num_vehicles]
         """
-        if_fixed_coupling = False
-        if if_fixed_coupling:
-            coupling_matrix = self.system.connections
-        else:
-            G = self.create_binary_adjacency_matrix(self.system.connections)
-            coupling_matrix = self.V_net.coupling_matrix(G)
-        # Current Lyapunov values
-        V_current = self.V_net(states, x_stars)
+        lyapunov_on = False
+        barrier_on = True
 
         # Compute control inputs
         controls = []
         original_controls = []
         for i in range(states.shape[1]):
-            state_i = states[:, i, :]
-            x_star_i = x_stars[:, i, :]
             controller = self.controllers[i]
             original_controller = self.original_controller[i]
             
             u_star = torch.zeros(1, device=states.device)
             u_bounds = (torch.tensor(-5.0, device=states.device), 
-                       torch.tensor(5.0, device=states.device))
+                    torch.tensor(5.0, device=states.device))
             
             if isinstance(controller, NetworkController):  # Check if it's a NetworkController
                 control = controller(states, x_stars, u_star, u_bounds)
@@ -243,83 +238,102 @@ class Trainer(pl.LightningModule):
                 controls.append(None)
                 original_controls.append(None)
         
-        cav_indices = [1]
+        cav_indices = [1,2,3]
         control_dist = 0
         value_dist = 0
         for cav_index in cav_indices:
-            control_dist += 10*torch.square(original_controls[cav_index] - controls[cav_index]).mean()
+            control_dist += torch.square(original_controls[cav_index] - controls[cav_index]).mean()/20
             value_dist += torch.relu(-(10 + self.critics(states, controls[cav_index]) - self.critics(states, original_controls[cav_index]))).mean()/5000
-
+        
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
 
-        # Next Lyapunov values
-        V_next = self.V_net(next_states, x_stars)
-        
-        # Compute Lyapunov decrease and larger or equal to zero conditions
-        V_decreases = []
-        coef_cons = []
-        #V_diff = torch.sum(nn.ReLU(V_current - beta))
-
-        for i in range(1, states.shape[1]):  # Skip leading vehicle
-            decrease = (V_next[:,i-1] - V_current[:,i-1])
-            # Add interconnection terms based on connection matrix
-
-            decrease += coupling_matrix[i][i] * V_current[:,i-1]
-            coef_con = torch.tensor(-coupling_matrix[i][i], device=V_current.device, dtype=V_current.dtype)
+        if lyapunov_on:
+            if_fixed_coupling = False
             if if_fixed_coupling:
-                for j in coupling_matrix[i]:
-                    if j >= 1:
-                        decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                coupling_matrix = self.system.connections
             else:
-                for j in range(1, states.shape[1]):
-                    decrease -= coupling_matrix[i][j] * V_current[:,j-1]
-                    coef_con += coupling_matrix[i][j]
-            # Add disturbance term
-            #decrease -= torch.norm(disturbances[i])**2
-            V_decreases.append(decrease)
-            coef_cons.append(coef_con)
+                G = self.create_binary_adjacency_matrix(self.system.connections)
+                coupling_matrix = self.V_net.coupling_matrix(G)
+            # Current Lyapunov values
+            V_current = self.V_net(states, x_stars)
+
+            # Next Lyapunov values
+            V_next = self.V_net(next_states, x_stars)
+            
+            # Compute Lyapunov decrease and larger or equal to zero conditions
+            V_decreases = []
+            coef_cons = []
+            #V_diff = torch.sum(nn.ReLU(V_current - beta))
+
+            for i in range(1, states.shape[1]):  # Skip leading vehicle
+                decrease = (V_next[:,i-1] - V_current[:,i-1])
+                # Add interconnection terms based on connection matrix
+
+                decrease += coupling_matrix[i][i] * V_current[:,i-1]
+                coef_con = torch.tensor(-coupling_matrix[i][i], device=V_current.device, dtype=V_current.dtype)
+                if if_fixed_coupling:
+                    for j in coupling_matrix[i]:
+                        if j >= 1:
+                            decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                else:
+                    for j in range(1, states.shape[1]):
+                        decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                        coef_con += coupling_matrix[i][j]
+                # Add disturbance term
+                #decrease -= torch.norm(disturbances[i])**2
+                V_decreases.append(decrease)
+                coef_cons.append(coef_con)
+        else:
+            V_decreases = None
+            V_current = None
+            coef_cons = None
 
         # barrier conditions
         def check_safety(states):
             tau = 0.5
-            margin = 0.01
+            margin = 0.0
             h = (states[:,1:,0] - tau*states[:,1:,1]).squeeze()
             masked_h = torch.zeros_like(h)
             masked_h[h > margin] = 1
             masked_h[h <= margin] = -1
             return masked_h
 
-        barrier_value = self.barrier_net(states, x_stars)
-        barrier_next = self.barrier_net(next_states, x_stars)
-        label = check_safety(states)
-        gamma = 1e-3
-        # temp_matrix = torch.tensor([[-0.1,0.02,0.01],[0.02,-0.1,0.01],[0.01,0.02,-0.1]], device=states.device, dtype=states.dtype)
+        if barrier_on:
+            barrier_value = self.barrier_net(states, x_stars)
+            barrier_next = self.barrier_net(next_states, x_stars)
+            label = check_safety(states)
+            gamma = 3e-3
+            # temp_matrix = torch.tensor([[-0.1,0.02,0.01],[0.02,-0.1,0.01],[0.01,0.02,-0.1]], device=states.device, dtype=states.dtype)
 
-        # safe region loss
-        safe_mask = (label == 1)
-        if safe_mask.sum() > 0:
-            loss_barrier_safe = torch.relu(gamma - barrier_value[safe_mask]).mean()
+            # safe region loss
+            safe_mask = (label == 1)
+            if safe_mask.sum() > 0:
+                loss_barrier_safe = torch.relu(gamma - barrier_value[safe_mask]).mean()
+            else:
+                loss_barrier_safe = torch.tensor(0., device=states.device, dtype=states.dtype)
+
+            unsafe_mask = (label == -1)
+            if unsafe_mask.sum() > 0:
+                loss_barrier_unsafe = torch.relu(gamma + barrier_value[unsafe_mask]).mean()
+            else:
+                loss_barrier_unsafe = torch.tensor(0., device=states.device, dtype=states.dtype)
+            loss_barrier_derivative = torch.relu(barrier_value@self.barrier_net.coupling_matrix() - (barrier_next - barrier_value)).mean()
+
+            loss_barrier_coef = torch.tensor([5, 5,0.4], device=states.device, dtype=states.dtype)
+            loss_barrier = loss_barrier_coef[0] * loss_barrier_safe + loss_barrier_coef[1] * loss_barrier_unsafe + loss_barrier_coef[2] * loss_barrier_derivative
+            if torch.isnan(loss_barrier).any():
+                print("loss_barrier_safe: ", loss_barrier_safe, "loss_barrier_unsafe: ", loss_barrier_unsafe, "loss_barrier_derivative: ", loss_barrier_derivative)
         else:
-            loss_barrier_safe = torch.tensor(0., device=states.device, dtype=states.dtype)
-
-        unsafe_mask = (label == -1)
-        if unsafe_mask.sum() > 0:
-            loss_barrier_unsafe = torch.relu(gamma + barrier_value[unsafe_mask]).mean()
+            loss_barrier = None
+        if V_decreases is not None:
+            return torch.stack(V_decreases), V_current, loss_barrier, control_dist, torch.stack(coef_cons), value_dist
         else:
-            loss_barrier_unsafe = torch.tensor(0., device=states.device, dtype=states.dtype)
-        loss_barrier_derivative = torch.relu(barrier_value@self.barrier_net.coupling_matrix() - (barrier_next - barrier_value)).mean()
-
-        loss_barrier_coef = torch.tensor([0.1,0.1,0.05], device=states.device, dtype=states.dtype)
-        loss_barrier = loss_barrier_coef[0] * loss_barrier_safe + loss_barrier_coef[1] * loss_barrier_unsafe + loss_barrier_coef[2] * loss_barrier_derivative
-        if torch.isnan(loss_barrier).any():
-            print("loss_barrier_safe: ", loss_barrier_safe, "loss_barrier_unsafe: ", loss_barrier_unsafe, "loss_barrier_derivative: ", loss_barrier_derivative)
-        return torch.stack(V_decreases), V_current, loss_barrier, control_dist, torch.stack(coef_cons), value_dist
+            return None, None, loss_barrier, control_dist, None, value_dist
 
 
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
-
         
         states, x_stars, disturbances = batch
 
@@ -330,11 +344,18 @@ class Trainer(pl.LightningModule):
 
         # Compute loss ensuring string stability conditions
         if self.current_index == 0:
-            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + loss_barrier #+ 100*torch.relu(coef_cons).mean() #+ control_dist #+ value_dist 
+            if V_decreases is not None:
+                loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + loss_barrier #+ 100*torch.relu(coef_cons).mean() #+ control_dist #+ value_dist 
+            else:
+                loss = loss_barrier
         else: 
             #if torch.any(coef_cons)>=-0.001:
             #self.V_net.coupling_matrix.coupling_matrix.requires_grad = False
-            loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + control_dist + value_dist + loss_barrier #+ 100*torch.relu(coef_cons).mean() #+ reward_related_loss  
+            if V_decreases is not None:
+                loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + loss_barrier # + control_dist + value_dist
+            else:
+                loss = loss_barrier  + control_dist #+ value_dist
+            #print(control_dist)
         
         # Update networks
         opt.zero_grad()
@@ -343,9 +364,11 @@ class Trainer(pl.LightningModule):
         
         # Add detailed logging
         self.log("train_loss", loss, prog_bar=True)  # Show in progress bar
-        self.log("loss_decrease", 5*torch.relu(V_decreases).mean(), prog_bar=True)
-        self.log("loss_positive", 10*torch.relu(-V_current).mean(), prog_bar=True)
-        self.log("loss_barrier", loss_barrier, prog_bar=True)
+        if V_decreases is not None:
+            self.log("loss_decrease", 5*torch.relu(V_decreases).mean(), prog_bar=True)
+            self.log("loss_positive", 10*torch.relu(-V_current).mean(), prog_bar=True)
+        if loss_barrier is not None:
+            self.log("loss_barrier", loss_barrier, prog_bar=True)
 
         return loss
 
@@ -355,11 +378,15 @@ class Trainer(pl.LightningModule):
         epsilon = 1e-2
         V_decreases, V_current, loss_barrier, control_dist, coef_cons, value_dist = self.vector_lyapunov_barrier_conditions(states, x_stars, disturbances)
         if self.current_index == 0:
-
-            val_loss = 10 * torch.relu(-V_current+epsilon).mean() +  5*torch.relu(V_decreases + epsilon).mean() + loss_barrier # +control_dist+ value_dist + torch.relu(coef_cons).mean()
+            if V_decreases is not None:
+                val_loss = 10 * torch.relu(-V_current+epsilon).mean() +  5*torch.relu(V_decreases + epsilon).mean() + loss_barrier # +control_dist+ value_dist + torch.relu(coef_cons).mean()
+            else:
+                val_loss = loss_barrier
         else: 
-            val_loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + loss_barrier #+ control_dist+ value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
-        
+            if V_decreases is not None:
+                val_loss = 10 * torch.relu(-V_current+epsilon).mean() + 5*torch.relu(V_decreases + epsilon).mean() + loss_barrier #+ control_dist+ value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
+            else:
+                val_loss = loss_barrier
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
         
@@ -370,14 +397,15 @@ class Trainer(pl.LightningModule):
         parameters = []
         
         # Add V_net parameters
-        parameters.extend(self.V_net.parameters())
+        #parameters.extend(self.V_net.parameters())
         parameters.extend(self.barrier_net.parameters())
         
-        if self.current_index > 1:
+        if self.current_index > 0:
             # Add controller parameters using index
             for i in range(len(self.controllers)):
                 if self.controllers[i] is not None and hasattr(self.controllers[i], 'parameters'):
                     parameters.extend(self.controllers[i].parameters())
+        
 
         optimizer = torch.optim.Adam(parameters, lr=self.learning_rate)
         return optimizer
@@ -394,7 +422,7 @@ class PlatoonDataModule(pl.LightningDataModule):
         
         # Define state ranges
         self.spacing_range = (5, 35.0)  # Centered around desired_spacing
-        self.vel_range = (5.0, 25.0)
+        self.vel_range = (0.0, 30.0)
         self.dist_range = (-0.5, 0.5)
 
     def _generate_samples(self):
@@ -570,7 +598,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
 
     # Initialize trainer
     trainer = Trainer(V_net, barrier_net, controllers, system, 
-                                   learning_rate=learning_rate, current_index = index, original_controller = controllers, critics = critics)
+                                   learning_rate=learning_rate, current_index = index, original_controller = copy.deepcopy(controllers), critics = critics)
 
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
@@ -597,9 +625,9 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     # Update system connections
     # Convert current dictionary connections to a binary adjacency matrix
 
-    
     # Compute new coupling matrix using V_net
     new_matrix = V_net.coupling_matrix(G)
+    new_CBF_matrix = barrier_net.coupling_matrix()
     
     # Convert new_matrix back to dictionary form
     new_connections = {}
@@ -610,9 +638,20 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
             if abs(val) > 1e-9:
                 new_connections[i][j] = val
 
-    print("Old connections: ", system.connections)
-    print("New connections: ", new_connections)
+    print("Old Lyapunov connections: ", system.connections)
+    print("New Lyapunov connections: ", new_connections)
     system.connections = new_connections
+
+    CBF_connections = {}
+    for i in range(new_CBF_matrix.size(0)):
+        CBF_connections[i] = {}
+        for j in range(new_CBF_matrix.size(1)):
+            val = new_CBF_matrix[i, j].item()
+            if abs(val) > 1e-9:
+                CBF_connections[i][j] = val
+
+    system.CBF_coupling_matrix = CBF_connections
+    print("CBF connections: ", CBF_connections)
 
     return controllers, system, V_net, barrier_net
 
@@ -643,7 +682,7 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         new_x_stars[..., 0] = 20.0
         new_x_stars[..., 1] = 15.0
 
-        new_data_disturbances = torch.zeros((self.counterexamples.shape[0],4))
+        new_data_disturbances = torch.zeros((self.counterexamples.shape[0],3))
 
         # 添加反例数据
         combined_data_states = torch.cat([old_data_states, self.counterexamples], dim=0)
@@ -861,6 +900,7 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
     
     # Compute new coupling matrix using V_net
     new_matrix = V_net.coupling_matrix(G)
+    new_CBF_matrix = barrier_net.coupling_matrix()
     
     # Convert new_matrix back to dictionary form
     new_connections = {}
@@ -871,10 +911,20 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
             if abs(val) > 1e-9:
                 new_connections[i][j] = val
 
-    print("Old connections: ", system.connections)
-    print("New connections: ", new_connections)
+    print("Old Lyapunov connections: ", system.connections)
+    print("New Lyapunov connections: ", new_connections)
     system.connections = new_connections
 
+    CBF_connections = {}
+    for i in range(new_CBF_matrix.size(0)):
+        CBF_connections[i] = {}
+        for j in range(new_CBF_matrix.size(1)):
+            val = new_CBF_matrix[i, j].item()
+            if abs(val) > 1e-9:
+                CBF_connections[i][j] = val
+
+    system.CBF_coupling_matrix = CBF_connections
+    print("CBF connections: ", CBF_connections)
     
     return controllers, system, V_net, barrier_net
 

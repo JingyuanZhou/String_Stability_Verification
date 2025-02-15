@@ -6,12 +6,13 @@ import onnx
 from networks import CombinedControllers
 
 class CombinedNetwork(nn.Module):
-    def __init__(self, controllers, V_net, cav_indices, state_dims, system_dynamics):
+    def __init__(self, controllers, V_net, B_net, cav_indices, state_dims, system_dynamics):
         super(CombinedNetwork, self).__init__()
         self.controllers = controllers
         self.CombindedControllers = CombinedControllers(controllers)
-        self.V_net_1 = V_net
-        #self.V_net_2 = V_net
+        self.V_net = V_net
+        self.B_net = B_net
+
         self.system_dynamics = system_dynamics
         self.cav_indices = cav_indices
         self.state_dims = state_dims
@@ -74,12 +75,16 @@ class CombinedNetwork(nn.Module):
         next_state = torch.matmul(self.A, x.reshape(2*self.num_vehicles)) + torch.matmul(self.b, acceleration.reshape(self.num_vehicles))
         
         # 计算Lyapunov值
-        output_V = self.V_net_1(x, x_stars)
-        next_V = self.V_net_1(next_state, x_stars)
+        output_V = self.V_net(x, x_stars)
+        next_V = self.V_net(next_state, x_stars)
 
-        return output_V, next_state, next_V
+        # Calculate barrier values
+        output_B = self.B_net(x, x_stars)
+        next_B = self.B_net(next_state, x_stars)
 
-def combined_model(V_net, controllers, system_dynamics, output_file, state_dims, cav_indices): 
+        return output_V, next_state, next_V, output_B, next_B
+
+def combined_model(V_net, B_net, controllers, system_dynamics, output_file, state_dims, cav_indices): 
     """
     Combine V_net, controllers and previous model into a single ONNX model
     
@@ -93,7 +98,7 @@ def combined_model(V_net, controllers, system_dynamics, output_file, state_dims,
     """
     
     # Create and export combined model
-    combined_network = CombinedNetwork(controllers, V_net, cav_indices, state_dims, system_dynamics)
+    combined_network = CombinedNetwork(controllers, V_net, B_net, cav_indices, state_dims, system_dynamics)
     
     torch.save(combined_network, output_file.replace(".onnx", ".pth"))
     # 创建包含所有车辆状态的dummy输入
@@ -114,7 +119,7 @@ def combined_model(V_net, controllers, system_dynamics, output_file, state_dims,
         output_file,
         export_params=True,opset_version=10,do_constant_folding=True,
         input_names=['input_x'],
-        output_names=['output_V','next_state','next_V'],
+        output_names=['output_V','next_state','next_V', 'output_B', 'next_B'],
     )
 
     model = onnx.load(output_file)

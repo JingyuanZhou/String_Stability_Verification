@@ -7,7 +7,7 @@ from networks import NetworkController, system_network, DoubleQCritic, VectorLya
 import os
 
 # 初始化系统参数
-num_vehicles = 5
+num_vehicles = 4
 cav_indices = [1,2,3]  # 第二辆车是CAV
 dynamics_params = {
     'dt': 0.1,
@@ -47,7 +47,7 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model.ckpt') #229
+check_point = torch.load(f'model_weights/best_model-v124.ckpt') #229
 parameters = check_point['state_dict']
 # 重新映射参数键名
 pre_trained_id = 99
@@ -78,7 +78,7 @@ else:
             controller_parameters[new_key] = v
 
 controllers = nn.ModuleList([
-    NetworkController(10, 1) if i in cav_indices  # state_dim=2, control_dim=1
+    NetworkController(2*num_vehicles, 1) if i in cav_indices  # state_dim=2, control_dim=1
     else nn.Identity() for i in range(num_vehicles)
 ])
 
@@ -92,7 +92,7 @@ else:
             controllers[i].load_state_dict(controller_parameters)
 controllers.eval()
 
-critics = DoubleQCritic(10, 1)
+critics = DoubleQCritic(8, 1)
 pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
 if pre_trained_critics is not None:
     raw_parameters_critics = torch.load(pre_trained_critics)
@@ -125,7 +125,7 @@ with torch.no_grad():
         for i in range(num_vehicles):
             if i in cav_indices:
                 state_i = states[:, i, :]
-                x_star = torch.tensor([20.0, 15.0]*5)  # 期望状态
+                x_star = torch.tensor([20.0, 15.0]*num_vehicles)  # 期望状态
                 u_star = torch.zeros(1)
                 u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
 
@@ -195,12 +195,12 @@ for vehicle_idx in range(2):#num_vehicles-1
     for i, s in enumerate(spacing_space):
         for j, v in enumerate(velocity_space):
             if vehicle_idx == 0:
-                x = torch.tensor([[20.0, 15.0, s, v, 20.0, 15.0, 20.0, 15.0, 20.0, 15.0]], dtype=torch.float32)
-                x_star = torch.tensor([[20.0, 15.0]*5], dtype=torch.float32)
+                x = torch.tensor([[20.0, 15.0, s, v, 20.0, 15.0, 20.0, 15.0]], dtype=torch.float32)
+                x_star = torch.tensor([[20.0, 15.0]*num_vehicles], dtype=torch.float32)
                 V[i, j] = V_net(x, x_star)[0][0].item()
             else:
-                x = torch.tensor([[20.0, 15.0, 20.0, 15.0, s, v, 20.0, 15.0, 20.0, 15.0]], dtype=torch.float32)
-                x_star = torch.tensor([[20.0, 15.0]*5], dtype=torch.float32)
+                x = torch.tensor([[20.0, 15.0, 20.0, 15.0, s, v, 20.0, 15.0]], dtype=torch.float32)
+                x_star = torch.tensor([[20.0, 15.0]*num_vehicles], dtype=torch.float32)
                 V[i, j] = V_net(x, x_star)[0][1].item()
 
     # Create a meshgrid: X corresponds to spacing, Y corresponds to velocity
@@ -259,7 +259,7 @@ for k, v in raw_parameters.items():
             original_controller_parameters[new_key] = v
 
 original_controllers = nn.ModuleList([
-    NetworkController(10, 1) if i in cav_indices  # state_dim=2, control_dim=1
+    NetworkController(2*num_vehicles, 1) if i in cav_indices  # state_dim=2, control_dim=1
     else nn.Identity() for i in range(num_vehicles)
 ])
 original_controller_parameters = {k.replace('1.', ''): v for k, v in original_controller_parameters.items()}
@@ -267,9 +267,9 @@ original_controllers[1].load_state_dict(original_controller_parameters)
 
 for i, s in enumerate(spacing_space):
     for j, v in enumerate(velocity_space):
-        sample_x = torch.tensor([[20.0, 15.0,s, v, 20.0, 15.0, 20.0, 15.0, 20.0, 15.0]],dtype=torch.float32)
+        sample_x = torch.tensor([[20.0, 15.0,s, v, 20.0, 15.0, 20.0, 15.0]],dtype=torch.float32)
 
-        x_star = torch.tensor([[20.0, 15.0]*5],dtype=torch.float32)
+        x_star = torch.tensor([[20.0, 15.0]*num_vehicles],dtype=torch.float32)
         u_star = torch.zeros(1)
         u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
         new_controller = controllers[1](sample_x, x_star, u_star, u_bounds)

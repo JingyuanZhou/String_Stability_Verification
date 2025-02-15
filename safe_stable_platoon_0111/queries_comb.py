@@ -36,13 +36,15 @@ class VerificationQuery:
         v_current = network.outputVars[0][0]
         next_state = network.outputVars[1]
         v_next = network.outputVars[2][0]
+        b_current = network.outputVars[3][0]
+        b_next = network.outputVars[4][0]
 
         #print("current_state", current_state)
         #print("v_current", v_current)
         #print("next_state", next_state)
         #print("v_next", v_next)
         
-        return current_state, next_state, v_current, v_next
+        return current_state, next_state, v_current, v_next, b_current, b_next
 
         
     def check_descent(self, input_bounds, epsilon=0.01, useMILP=True):
@@ -76,7 +78,7 @@ class VerificationQuery:
         
         #print("input_bounds", input_bounds)
 
-        current_state, next_state, v_current, v_next = self.run_unroll(network)
+        current_state, next_state, v_current, v_next, b_current, b_next = self.run_unroll(network)
         #current_state, v_current = self.run_unroll(network)
 
         # ========== 1) 设置输入上下界，包含头车固定到平衡态的示例 ========== 
@@ -121,35 +123,71 @@ class VerificationQuery:
         # 需要做更加细粒度的索引处理
         # 这里只做一个演示，示意如何写不等式
         disjunction = []
+        use_lyap = False
+        if use_lyap:
+            for i in range(self.num_lyap):
+                # Positive constraint: v_current[i] >= 0
+
+                ineq1 = MarabouUtils.Equation(MarabouCore.Equation.LE)
+                ineq1.addAddend(1.0, v_current[i])
+                ineq1.setScalar(0.000001) 
+
+                ineq2 = MarabouUtils.Equation(MarabouCore.Equation.LE)
+                ineq2.addAddend(1.0, v_next[i])
+                ineq2.setScalar(0.000001) 
+
+                # Descent constraint
+                ineq3 = MarabouUtils.Equation(MarabouCore.Equation.GE)
+                aii = self.system.connections[i+1][i+1]
+                epsilon = -0.00001#0.001
+                ineq3.addAddend(1.0, v_next[i])
+                ineq3.addAddend(-1.0 + aii, v_current[i])
+                for j in self.system.connections[i+1]:
+                    if j >= 1:
+                        ineq3.addAddend(-self.system.connections[i+1][j], v_current[j-1])
+
+                ineq3.setScalar(epsilon) #epsilon
+
+                disjunction.append([ineq1])
+                #disjunction_lyap.append([ineq2])
+                disjunction.append([ineq3])
+
+
+
         for i in range(self.num_lyap):
-            # Positive constraint: v_current[i] >= 0
+            epsilon_CBF = -0.000001
+            ineq_CBF_positive = MarabouUtils.Equation(MarabouCore.Equation.GE)
+            ineq_CBF_positive.addAddend(1.0, b_current[i])
+            ineq_CBF_positive.setScalar(-epsilon_CBF)
+            ineq_safety_con_positive = MarabouUtils.Equation(MarabouCore.Equation.GE)
+            ineq_safety_con_positive.addAddend(1.0, current_state[i+1,0])
+            ineq_safety_con_positive.addAddend(-0.5, current_state[i+1,1])
+            ineq_safety_con_positive.setScalar(-epsilon_CBF)
 
-            ineq1 = MarabouUtils.Equation(MarabouCore.Equation.LE)
-            ineq1.addAddend(1.0, v_current[i])
-            ineq1.setScalar(0.000001) 
+            ineq_CBF_negative = MarabouUtils.Equation(MarabouCore.Equation.LE)
+            ineq_CBF_negative.addAddend(1.0, b_current[i])
+            ineq_CBF_negative.setScalar(epsilon_CBF) 
+            ineq_safety_con_negative = MarabouUtils.Equation(MarabouCore.Equation.LE)
+            ineq_safety_con_negative.addAddend(1.0, current_state[i+1,0])
+            ineq_safety_con_negative.addAddend(-0.5, current_state[i+1,1])
+            ineq_safety_con_negative.setScalar(epsilon_CBF)
 
-            ineq2 = MarabouUtils.Equation(MarabouCore.Equation.LE)
-            ineq2.addAddend(1.0, v_next[i])
-            ineq2.setScalar(0.000001) 
+            condition_1 = [ineq_CBF_positive, ineq_safety_con_negative]
+            condition_2 = [ineq_CBF_negative, ineq_safety_con_positive]
 
-            # Descent constraint
-            ineq3 = MarabouUtils.Equation(MarabouCore.Equation.GE)
-            aii = self.system.connections[i+1][i+1]
-            epsilon = -0.000001#0.001
-            ineq3.addAddend(1.0, v_next[i])
-            ineq3.addAddend(-1.0 + aii, v_current[i])
-            for j in self.system.connections[i+1]:
-                if j >= 1:
-                    ineq3.addAddend(-self.system.connections[i+1][j], v_current[j-1])
+            ineq_CBF_derivative = MarabouUtils.Equation(MarabouCore.Equation.GE)
+            ineq_CBF_derivative.addAddend(-1.0, b_next[i])
+            ineq_CBF_derivative.addAddend(1.0 + self.system.CBF_coupling_matrix[i][i], b_current[i])
+            for j in self.system.CBF_coupling_matrix[i]:
+                if j != i:
+                    ineq_CBF_derivative.addAddend(self.system.CBF_coupling_matrix[i][j], b_current[j])
 
-            ineq3.setScalar(epsilon) #epsilon
+            ineq_CBF_derivative.setScalar(-epsilon_CBF)
 
-            disjunction.append([ineq1])
-            #disjunction.append([ineq2])
-            disjunction.append([ineq3])
+            disjunction.append(condition_1)
+            disjunction.append(condition_2)
+            disjunction.append([ineq_CBF_derivative])
 
-        #network.saveQuery("query_1.txt")
-        #print("disjunction", disjunction)
         network.addDisjunctionConstraint(disjunction)
         exitCode, vals, stats = network.solve(options=options, verbose=False)
 
@@ -201,8 +239,10 @@ class VerificationQuery:
             return [1]
         elif exitCode == "timeout":
             # 超时，不确定
+            print("timeout")
             return [-1]
         else:
+            print("error")
             # 其他错误(可能 error)
             return [-1]
     

@@ -70,7 +70,7 @@ diff = end_train_time - st_train_time
 print("Total training time for model index", str(index), ":", str(diff.seconds))
 
 # Convert and combine models
-combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
+combined_model(V_net, barrier_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
 
 # Verification
 st_ver_time = datetime.now()
@@ -99,7 +99,7 @@ while (len(ret) > 0) and (index < max_iters):
     diff = end_train_time - st_train_time
     print("Total training time for model index", str(index), ":", str(diff.seconds))
 
-    combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
+    combined_model(V_net, barrier_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
 
     st_ver_time = datetime.now()
     ret, ret_ranges, failed = safe_descent_cond_check(
