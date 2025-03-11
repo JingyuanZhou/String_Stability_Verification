@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, List
 import numpy as np
 import gym
 from gym import spaces
@@ -6,18 +6,19 @@ from numpy import random
 import pandas as pd
 
 class PlatoonEnv(gym.Env):
-    def __init__(self, num_vehicles = 6, dt = 0.1, cav_index = [2], select_scenario = 0):
+    def __init__(self, num_vehicles = 6, dt = 0.1, cav_index = [2, 3, 4], select_scenario = 0):
         super().__init__()
         
         # 基本参数
         self.num_vehicles = num_vehicles
         self.dt = dt
-        self.cav_index = cav_index
+        self.cav_index = cav_index  # Now a list of multiple CAV indices
+        self.num_cavs = len(cav_index)  # Number of CAVs
         self.select_scenario = select_scenario
         self.steps = 0
         self.max_steps = 2000
         
-        # 动作和观察空间
+        # 动作和观察空间 - Modified for multi-agent
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf,
@@ -25,10 +26,11 @@ class PlatoonEnv(gym.Env):
             dtype=np.float32
         )
         
+        # Action space for each CAV
         self.action_space = spaces.Box(
             low=-5,
             high=5, 
-            shape=(1,),
+            shape=(self.num_cavs,),  # One action per CAV
             dtype=np.float32
         )
 
@@ -89,9 +91,10 @@ class PlatoonEnv(gym.Env):
         
         return self.get_obs()
 
-    def step(self, action, vehicle_id = None):
-        # 更新控制输入
-        self.acceleration[self.cav_index[0]] = action[0]
+    def step(self, action):
+        # 更新控制输入 - Modified for multi-agent
+        for i, cav_idx in enumerate(self.cav_index):
+            self.acceleration[cav_idx] = action[i]
         
         # 头车随机抖动 (每个step都有)
         if self.select_scenario == 0:
@@ -166,36 +169,52 @@ class PlatoonEnv(gym.Env):
         return self.position.astype(np.float32)
 
     def _get_reward(self):
-        # 计算安全性奖励
+        # Calculate reward for each CAV and sum them
+        total_reward = 0
         
-        ttc = self.spacing[self.cav_index[0]] / (self.velocity[self.cav_index[0]-1] - self.velocity[self.cav_index[0]] + 1e-6)
-        if 0 < ttc < 4:
-            safety = np.log(ttc / 4)
-        else:
-            safety = 0
-                
-        # 计算效率奖励
-        efficiency = 0
-        for i in self.cav_index:
-            if self.spacing[i]/self.velocity[i] > 2.5:  # 车距过大惩罚
+        for cav_idx in self.cav_index:
+            # 计算安全性奖励
+            ttc = self.spacing[cav_idx] / (self.velocity[cav_idx-1] - self.velocity[cav_idx] + 1e-6)
+            if 0 < ttc < 4:
+                safety = np.log(ttc / 4)
+            else:
+                safety = 0
+                    
+            # 计算效率奖励
+            efficiency = 0
+            if self.spacing[cav_idx]/self.velocity[cav_idx] > 2.5:  # 车距过大惩罚
                 efficiency -= 2.5
-                
-        # 计算稳定性奖励
-        stability = 0
-        # calculate a decay weights for stability
-        decay_weights = [0.4, 0.02]
-        for i in range(self.cav_index[0], self.cav_index[0]+2):
-            stability -= decay_weights[i - self.cav_index[0]] * (self.velocity[i] - self.velocity[i-1])**2
+                    
+            # 计算稳定性奖励
+            stability = 0
+            # calculate a decay weights for stability
+            decay_weights = [0.4, 0.02]
+            for i in range(cav_idx, min(cav_idx+2, self.num_vehicles)):
+                stability -= decay_weights[i - cav_idx] * (self.velocity[i] - self.velocity[i-1])**2
 
-        fuel_consumption = -self.acceleration[self.cav_index[0]]**2
+            fuel_consumption = -self.acceleration[cav_idx]**2
 
-        # spacing equilibrium
-        # print(self.spacing[self.cav_index[0]])
-        spacing_equilibrium = -(self.spacing[self.cav_index[0]] - self.s0)**2
-        
+            # spacing equilibrium
+            spacing_equilibrium = -(self.spacing[cav_idx] - self.s0)**2
             
-        reward_weights = [0.4, 0.3, 0.2, 0.1, 0.0]
-        #print(f"reward_safety: {safety}, reward_efficiency: {efficiency}, reward_stability: {stability}, reward_fuel_consumption: {fuel_consumption}, reward_spacing_equilibrium: {spacing_equilibrium}")
-
-        return safety * reward_weights[0] + efficiency * reward_weights[1] + stability * reward_weights[2] + fuel_consumption * reward_weights[3] + spacing_equilibrium * reward_weights[4]
+            # String stability reward - new component for multi-agent
+            string_stability = 0
+            if cav_idx > self.cav_index[0]:  # Not the first CAV
+                # Penalize amplification of velocity differences between CAVs
+                prev_cav_idx = max([idx for idx in self.cav_index if idx < cav_idx], default=cav_idx-1)
+                string_stability -= 0.3 * max(0, abs(self.velocity[cav_idx] - self.velocity[cav_idx-1]) - 
+                                           abs(self.velocity[prev_cav_idx] - self.velocity[prev_cav_idx-1]))
+                
+            reward_weights = [0.4, 0.3, 0.2, 0.1, 0.0, 0.2]  # Added weight for string stability
+            cav_reward = (safety * reward_weights[0] + 
+                         efficiency * reward_weights[1] + 
+                         stability * reward_weights[2] + 
+                         fuel_consumption * reward_weights[3] + 
+                         spacing_equilibrium * reward_weights[4] +
+                         string_stability * reward_weights[5])
+            
+            total_reward += cav_reward
+            
+        # Average the reward across all CAVs
+        return total_reward / self.num_cavs
     

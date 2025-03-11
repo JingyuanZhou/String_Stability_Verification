@@ -30,7 +30,7 @@ dynamics_params = {
 }
 
 # Training parameters
-learning_rate = 2e-4
+learning_rate = 8e-4
 batch_size = 32
 num_epochs = 10
 
@@ -41,10 +41,12 @@ index = 0
 out_comb_folders = "combined/"
 cur_comb_file = out_comb_folders + f"combined_{index}.onnx"
 pre_trained_id = 99
-pre_trained_model = f"pre_train_model/sac_platoon_{pre_trained_id}_actor.pth"
-pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
-#pre_trained_model = None
-#pre_trained_critics = None
+
+# Load different pre-trained models for each CAV
+pre_trained_models = []
+for i in range(len(cav_indices)):
+    pre_trained_models.append(f"pre_train/pre_train_model_marl/sac_platoon_{pre_trained_id}_actor_{i}.pth")
+pre_trained_critics = f"pre_train/pre_train_model_marl/sac_platoon_{pre_trained_id}_critic.pth"
 
 # Train the model
 system_dynamics_network = system_network(state_dim=3)
@@ -62,7 +64,7 @@ controllers, system, V_net, barrier_net = train_model(
     system_dynamics_network=system_dynamics_network,
     train_system=False,
     index=index,
-    pre_trained_model=pre_trained_model,
+    pre_trained_models=pre_trained_models,
     pre_trained_critics = pre_trained_critics
 )
 end_train_time = datetime.now()
@@ -94,7 +96,7 @@ while (len(ret) > 0) and (index < max_iters):
     controllers, system, V_net, barrier_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 
                                                control_dims=control_dims, in_system=system, counterexamples=torch.Tensor(ret), 
                                                counterexample_ranges=ret_ranges, epoch=num_epochs, in_model= V_net, in_barrier_net=barrier_net, learning_rate=learning_rate,
-                                               in_controller = controllers, index = index, pre_trained_model=pre_trained_model, pre_trained_critics = pre_trained_critics, combined_model_path=cur_comb_file)
+                                               in_controller = controllers, index = index, pre_trained_models=pre_trained_models, pre_trained_critics = pre_trained_critics, combined_model_path=cur_comb_file)
     end_train_time = datetime.now()
     diff = end_train_time - st_train_time
     print("Total training time for model index", str(index), ":", str(diff.seconds))

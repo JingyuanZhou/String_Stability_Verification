@@ -134,10 +134,10 @@ class VectorLyapunovNetwork(nn.Module):
         x_star_1 = torch.matmul(x_star, self.W_star)
 
         # 计算每辆车的Lyapunov函数值
-        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.1  # CAV
-        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.1  # HDV
-        V_3 = self.network_2(x3) - self.network_2(x_star_1) + 0.1  # CAV
-        V_4 = self.network_2(x4) - self.network_2(x_star_1) + 0.1  # HDV
+        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.001  # CAV #0.1
+        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.01  # HDV
+        V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.01  # HDV
+        V_4 = self.network_4(x4) - self.network_4(x_star_1) + 0.01 # HDV
 
         # 组合所有Lyapunov函数值
         V = torch.cat([V_1, V_2, V_3, V_4], dim=1)
@@ -168,7 +168,7 @@ class NetworkController(nn.Module):
         self.W_change_state_position[4, 7] = 1
         self.W_change_state_position[6, 8] = 1
         self.W_change_state_position[8, 9] = 1
-        
+
     def forward(self, x, x_star, u_star, u_bounds):
         """
         Compute control input with clamping
@@ -184,7 +184,41 @@ class NetworkController(nn.Module):
         phi_pi_star = self.network(x_star)
         u = phi_pi - phi_pi_star #torch.clamp(phi_pi, u_min, u_max)# + u_star
         return u
-    
+
+class single_actor(nn.Module):
+    def __init__(self, state_dim, control_dim, hidden_dim=30):
+        super().__init__()
+        self.state_dim = state_dim
+        self.network = nn.Sequential(
+            nn.Linear(state_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, control_dim)
+        )
+
+        self.W_change_state_position = torch.zeros(self.state_dim, self.state_dim, requires_grad=False)
+        #index from 0 1 2 3 4 5 6 7 8 9 to 1 3 5 7 9 0 2 4 6 8 
+        self.W_change_state_position[1, 0] = 1
+        self.W_change_state_position[3, 1] = 1
+        self.W_change_state_position[5, 2] = 1
+        self.W_change_state_position[7, 3] = 1
+        self.W_change_state_position[9, 4] = 1
+        self.W_change_state_position[0, 5] = 1
+        self.W_change_state_position[2, 6] = 1
+        self.W_change_state_position[4, 7] = 1
+        self.W_change_state_position[6, 8] = 1
+        self.W_change_state_position[8, 9] = 1
+
+    def forward(self, x):
+        """
+        Compute control input
+        """
+        x = x.reshape(-1, self.state_dim)
+        x = x @ self.W_change_state_position
+        a = self.network(x)
+        return a
+
 class CombinedControllers(nn.Module):
     def __init__(self, controllers):
         super().__init__()
@@ -268,6 +302,7 @@ class DoubleQCritic(nn.Module):
 
     def forward(self, obs, action, both=False):
         obs = obs.reshape(-1, self.obs_dim)
+
         obs_action = torch.cat([obs, action], dim=-1)
         q1 = self.Q1(obs_action)
         q2 = self.Q2(obs_action)

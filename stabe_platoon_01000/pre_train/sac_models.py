@@ -49,7 +49,7 @@ class SingleQCritic(nn.Module):
 class DoubleQCritic(nn.Module):
     def __init__(self, obs_dim, action_dim, hidden_dim, hidden_depth, args):
         super().__init__()
-        
+        # + action_dim
         self.Q1 = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
         self.Q2 = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
         self.args = args

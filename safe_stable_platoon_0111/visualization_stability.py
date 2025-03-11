@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from training_exp_comb import PlatoonDynamics
 import torch.nn as nn
-from networks import NetworkController, system_network, DoubleQCritic, VectorLyapunovNetwork, system_network
+from networks import NetworkController, system_network, DoubleQCritic, VectorLyapunovNetwork, system_network, CombinedControllers
 import os
 
 # 初始化系统参数
@@ -47,63 +47,127 @@ system_dynamics_network = system_network(state_dim=3)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v124.ckpt') #229
+check_point = torch.load(f'model_weights/best_model-v209.ckpt') #229
 parameters = check_point['state_dict']
 # 重新映射参数键名
 pre_trained_id = 99
 if_load_pre_trained_model = False
 if if_load_pre_trained_model:
-    pre_trained_model = f"pre_train_model/sac_platoon_{pre_trained_id}_actor.pth"
-    raw_parameters = torch.load(pre_trained_model)
-    controller_parameters = {}
-    for k, v in raw_parameters.items():
-        if k.startswith('trunk'):
-            new_key = k.replace('trunk', 'network')
-            # 如果是最后一层的参数，只取一半（对应均值输出）
+    # Create controllers first
+    controllers = nn.ModuleList([
+        NetworkController(2*num_vehicles, 1) if i in cav_indices  # state_dim, control_dim
+        else nn.Identity() for i in range(num_vehicles)
+    ])
+    
+    # Handle the file path issue - check if files exist in different possible locations
+    pre_trained_base_path = "pre_train_model"  # Original path
+    alternative_paths = [
+        "pre_train_model",
+        "pre_train/pre_train_model",
+        "pre_train/pre_train_model_marl",
+        "pre_train_model_marl",
+        "."  # Current directory
+    ]
+    
+    # Find first valid path that contains required files
+    valid_base_path = None
+    for path in alternative_paths:
+        # Check if at least one actor file exists
+        if os.path.exists(f"{path}/sac_platoon_{pre_trained_id}_actor.pth"):
+            valid_base_path = path
+            break
+        # Or check for indexed actor files
+        elif os.path.exists(f"{path}/sac_platoon_{pre_trained_id}_actor_0.pth"):
+            valid_base_path = path
+            break
+    
+    if valid_base_path is None:
+        print("Warning: Could not find pre-trained model files in any expected location.")
+        print(f"Tried paths: {alternative_paths}")
+        print("Continuing without pre-trained models...")
+    else:
+        pre_trained_base_path = valid_base_path
+        print(f"Found pre-trained models in: {pre_trained_base_path}")
+    
+    # Try to load individual files for each CAV
+    individual_models_exist = False
+    for i, cav_idx in enumerate(cav_indices):
+        individual_model_path = f"{pre_trained_base_path}/sac_platoon_{pre_trained_id}_actor_{i}.pth"
+        if os.path.exists(individual_model_path):
+            individual_models_exist = True
+            try:
+                raw_parameters = torch.load(individual_model_path)
+                controller_parameters = {}
+                for k, v in raw_parameters.items():
+                    if k.startswith('trunk'):
+                        new_key = k.replace('trunk', 'network')
+                        if 'network.4.weight' in new_key:
+                            controller_parameters[new_key] = v[:1, :]  # Only keep mean
+                        elif 'network.4.bias' in new_key:
+                            controller_parameters[new_key] = v[:1]  # Only keep mean
+                        else:
+                            controller_parameters[new_key] = v
+                
+                controllers[cav_idx].load_state_dict(controller_parameters)
+                print(f"Loaded individual model for CAV {cav_idx} from {individual_model_path}")
+            except Exception as e:
+                print(f"Error loading model for CAV {cav_idx}: {e}")
+    
+    # If individual models don't exist, try loading the single model and apply to all CAVs
+    if not individual_models_exist:
+        single_model_path = f"{pre_trained_base_path}/sac_platoon_{pre_trained_id}_actor.pth"
+        if os.path.exists(single_model_path):
+            try:
+                raw_parameters = torch.load(single_model_path)
+                controller_parameters = {}
+                for k, v in raw_parameters.items():
+                    if k.startswith('trunk'):
+                        new_key = k.replace('trunk', 'network')
+                        if 'network.4.weight' in new_key:
+                            controller_parameters[new_key] = v[:1, :]  # Only keep mean
+                        elif 'network.4.bias' in new_key:
+                            controller_parameters[new_key] = v[:1]  # Only keep mean
+                        else:
+                            controller_parameters[new_key] = v
+                
+                # Apply the same parameters to all CAV controllers
+                for cav_idx in cav_indices:
+                    controllers[cav_idx].load_state_dict(controller_parameters)
+                
+                print(f"Loaded shared model for all CAVs from {single_model_path}")
+            except Exception as e:
+                print(f"Error loading shared model: {e}")
 
-            if 'network.4.weight' in new_key:  
-                controller_parameters[new_key] = v[:1, :]  # 只保留第一行，对应均值
-            elif 'network.4.bias' in new_key:
-                controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
-            else:
-                controller_parameters[new_key] = v
-
-    print("Original keys:", raw_parameters.keys())
-    print("New keys:", controller_parameters.keys())
 else:
+    # Load controllers from provided parameters
     controller_parameters = {}
     for k, v in parameters.items():
         if k.startswith('controllers'):
             new_key = k.replace('controllers.', '')
             controller_parameters[new_key] = v
-
-controllers = nn.ModuleList([
-    NetworkController(2*num_vehicles, 1) if i in cav_indices  # state_dim=2, control_dim=1
-    else nn.Identity() for i in range(num_vehicles)
-])
-
-#print("controller_parameters", controller_parameters)
-#print("controllers", controllers)
-if not if_load_pre_trained_model:   
+    
+    controllers = nn.ModuleList([
+        NetworkController(2*num_vehicles, 1) if i in cav_indices  # state_dim, control_dim
+        else nn.Identity() for i in range(num_vehicles)
+    ])
     controllers.load_state_dict(controller_parameters)
-else:
-    for i in range(num_vehicles):
-        if i in cav_indices:
-            controllers[i].load_state_dict(controller_parameters)
-controllers.eval()
 
-critics = DoubleQCritic(8, 1)
-pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
-if pre_trained_critics is not None:
-    raw_parameters_critics = torch.load(pre_trained_critics)
-    critics.load_state_dict(raw_parameters_critics)
 
-# 初始化状态
+# Load critic if needed for visualization/evaluation
+critics = DoubleQCritic(2*num_vehicles, len(cav_indices), centralized=True, num_agents=len(cav_indices))
+pre_trained_critics = f"pre_train/pre_train_model_marl/sac_platoon_{pre_trained_id}_critic.pth"
+raw_parameters_critics = torch.load(pre_trained_critics)
+critics.load_state_dict(raw_parameters_critics)
+critics.eval()
+print(f"Loaded pre-trained critic from {pre_trained_critics}")
+
+
+# Initialize state
 batch_size = 1
 states = torch.zeros((batch_size, num_vehicles, 2))
-# 设置初始状态
-states[:, 0, 0] = 20  # 领头车位置
-states[:, 0, 1] = 15.0  # 领头车速度
+# Set initial state
+states[:, 0, 0] = 20  # Initial spacing for lead vehicle
+states[:, 0, 1] = 15  # Initial velocity for lead vehicle
 for i in range(1, num_vehicles):
     states[:, i, 0] = 20.0  # 每辆车间隔20米
     states[:, i, 1] = 15.0  # 初始速度
@@ -243,39 +307,80 @@ for vehicle_idx in range(2):#num_vehicles-1
 values_new_controller = np.zeros((len(spacing_space), len(velocity_space)))
 value_origin_controller = np.zeros((len(spacing_space), len(velocity_space)))
 
-pre_trained_model = "pre_train_model/sac_platoon_99_actor.pth"
-raw_parameters = torch.load(pre_trained_model)
+# Initialize the parameters dictionary before loading models
 original_controller_parameters = {}
-for k, v in raw_parameters.items():
-    if k.startswith('trunk'):
-        new_key = k.replace('trunk', '1.network')
-        # 如果是最后一层的参数，只取一半（对应均值输出）
 
-        if '1.network.4.weight' in new_key:  
-            original_controller_parameters[new_key] = v[:1, :]  # 只保留第一行，对应均值
-        elif '1.network.4.bias' in new_key:
-            original_controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
-        else:
-            original_controller_parameters[new_key] = v
+# Load pre-trained models for each CAV
+for i, cav_idx in enumerate(cav_indices):
+    pre_trained_model = f"pre_train/pre_train_model_marl/sac_platoon_99_actor_{i}.pth"
+    try:
+        raw_parameters = torch.load(pre_trained_model)
+        
+        # Transform parameters with CAV-specific prefix
+        for k, v in raw_parameters.items():
+            if k.startswith('trunk'):
+                new_key = k.replace('trunk', f'{cav_idx}.network')
+                
+                # Only keep mean output from the last layer
+                if f'{cav_idx}.network.4.weight' in new_key:  
+                    original_controller_parameters[new_key] = v[:1, :]  # Only keep first row for mean
+                elif f'{cav_idx}.network.4.bias' in new_key:
+                    original_controller_parameters[new_key] = v[:1]  # Only keep first element for mean
+                else:
+                    original_controller_parameters[new_key] = v
+        
+        print(f"Loaded model for CAV {cav_idx} from {pre_trained_model}")
+    except Exception as e:
+        print(f"Error loading model for CAV {cav_idx}: {e}")
+        continue
 
+# Initialize controllers
 original_controllers = nn.ModuleList([
-    NetworkController(2*num_vehicles, 1) if i in cav_indices  # state_dim=2, control_dim=1
+    NetworkController(2*num_vehicles, 1) if i in cav_indices  # state_dim=2*num_vehicles, control_dim=1
     else nn.Identity() for i in range(num_vehicles)
 ])
-original_controller_parameters = {k.replace('1.', ''): v for k, v in original_controller_parameters.items()}
-original_controllers[1].load_state_dict(original_controller_parameters)
+
+# If no models were loaded, provide a warning
+if not original_controller_parameters:
+    print("Warning: No pre-trained models were successfully loaded.")
+    print("Controllers will use default initialization.")
+
+# Remove CAV index prefix before loading
+cleaned_parameters = {}
+for k, v in original_controller_parameters.items():
+    # Extract the part after the CAV index (e.g., '1.network' -> 'network')
+    parts = k.split('.')
+    if len(parts) > 1:
+        cav_idx = int(parts[0])
+        new_key = '.'.join(parts[1:])  # Remove the CAV index prefix
+        
+        # Store with the key format expected by the controller
+        if f"{cav_idx}" not in cleaned_parameters:
+            cleaned_parameters[f"{cav_idx}"] = {}
+        cleaned_parameters[f"{cav_idx}"][new_key] = v
+
+# Load parameters into each CAV controller
+for cav_idx in cav_indices:
+    if f"{cav_idx}" in cleaned_parameters:
+        original_controllers[cav_idx].load_state_dict(cleaned_parameters[f"{cav_idx}"])
+        print(f"Loaded parameters into controller for CAV {cav_idx}")
+
 
 for i, s in enumerate(spacing_space):
     for j, v in enumerate(velocity_space):
+        all_control_inputs_new = [None]
+        all_control_inputs_origin = [None]
         sample_x = torch.tensor([[20.0, 15.0,s, v, 20.0, 15.0, 20.0, 15.0]],dtype=torch.float32)
 
         x_star = torch.tensor([[20.0, 15.0]*num_vehicles],dtype=torch.float32)
         u_star = torch.zeros(1)
         u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
-        new_controller = controllers[1](sample_x, x_star, u_star, u_bounds)
-        origin_controller = original_controllers[1](sample_x, x_star, u_star, u_bounds)
-        values_new_controller[i,j] = critics(sample_x, new_controller).item()
-        value_origin_controller[i,j] = critics(sample_x, origin_controller).item()
+        for i in range(1,num_vehicles):
+            all_control_inputs_new.append(controllers[i](sample_x, x_star, u_star, u_bounds))
+            all_control_inputs_origin.append(original_controllers[i](sample_x, x_star, u_star, u_bounds))
+
+        values_new_controller[i,j] = critics(sample_x, all_control_inputs_new).item()
+        value_origin_controller[i,j] = critics(sample_x, all_control_inputs_origin).item()
 
 # Create a meshgrid
 X, Y = np.meshgrid(spacing_space, velocity_space)

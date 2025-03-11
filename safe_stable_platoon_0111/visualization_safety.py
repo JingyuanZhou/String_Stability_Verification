@@ -103,7 +103,7 @@ def main():
     barrier_net = VectorBarrierNetwork(state_dims)
     
     # Load checkpoint and extract V_net weights
-    checkpoint = torch.load('model_weights/best_model-v108.ckpt')
+    checkpoint = torch.load('model_weights/best_model-v209.ckpt')
     state_dict = checkpoint['state_dict']
     
     # Print all keys to see what's available
@@ -118,7 +118,6 @@ def main():
         if key.startswith('barrier_net.'):
             new_key = key[12:]  # Skip 'barrier_net.'
             barrier_net_state_dict[new_key] = value
-    
     
     # Load the modified state dict
     barrier_net.load_state_dict(barrier_net_state_dict)

@@ -54,7 +54,7 @@ def train_expert():
         'train': {
             'replay_mem': int(1e6),
             'initial_mem': int(1e4),
-            'max_steps': 2000,
+            'max_steps': 1000,
             'eval_interval': 1000,
             'num_eval_episodes': 5,
             'log_interval': 100,
@@ -131,7 +131,7 @@ def train_expert():
         episode_steps = 0
 
         start_time = time.time()
-
+ 
         while not done and episode_steps < args['train']['max_steps']:
             if steps < initial_memory:
                 # 随机采样动作来填充经验回放

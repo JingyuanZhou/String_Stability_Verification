@@ -22,9 +22,9 @@ def train_expert():
         
         # 环境参数
         'env': {
-            'num_vehicles': 4,
+            'num_vehicles': 4,  # Total number of vehicles
             'dt': 0.1,
-            'cav_index': [1],
+            'cav_index': [1, 2, 3],  # Three CAVs following the leader
             'select_scenario': 0,
         },
         
@@ -33,7 +33,7 @@ def train_expert():
             'gamma': 0.99,
             'critic_tau': 0.005,
             'init_temp': 0.1,
-            'hidden_dim': 30,
+            'hidden_dim': 64,  # Increased for centralized critic
             'hidden_depth': 2,
             'actor_lr': 1e-3,
             'critic_lr': 1e-3,
@@ -54,7 +54,7 @@ def train_expert():
         'train': {
             'replay_mem': int(1e6),
             'initial_mem': int(1e4),
-            'max_steps': 2000,
+            'max_steps': 1000,
             'eval_interval': 1000,
             'num_eval_episodes': 5,
             'log_interval': 100,
@@ -65,7 +65,7 @@ def train_expert():
         # 日志参数
         'log': {
             'log_dir': 'logs',
-            'exp_name': 'sac_expert'
+            'exp_name': 'sac_expert_marl_centralized_critic'  # Multi-agent RL
         }
     }
 
@@ -82,11 +82,15 @@ def train_expert():
 
     # 创建智能体
     obs_dim = env.observation_space.shape[0]
-    action_dim = env.action_space.shape[0]
+    action_dim = env.action_space.shape[0]  # Number of agents (CAVs)
     action_range = [
         float(env.action_space.low.min()),
         float(env.action_space.high.max())
     ]
+    
+    num_agents = len(args['env']['cav_index'])
+    print(f"Initializing MARL with {num_agents} actors and centralized critic")
+    print(f"Observation dim: {obs_dim}, Action dim per agent: 1, Total actions: {action_dim}")
     
     agent = SAC(
         obs_dim=obs_dim,
@@ -96,10 +100,21 @@ def train_expert():
         args=args['agent']
     )
 
-    # 创建学习率调度器
-    actor_scheduler = optim.lr_scheduler.StepLR(agent.actor_optimizer, step_size=1000, gamma=0.99)
-    critic_scheduler = optim.lr_scheduler.StepLR(agent.critic_optimizer, step_size=1000, gamma=0.99)
-    alpha_scheduler = optim.lr_scheduler.StepLR(agent.log_alpha_optimizer, step_size=1000, gamma=0.99)
+    # 创建学习率调度器 - for multi-agent
+    if agent.multi_agent:
+        actor_schedulers = [
+            optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.99)
+            for opt in agent.actor_optimizers
+        ]
+        critic_scheduler = optim.lr_scheduler.StepLR(agent.critic_optimizer, step_size=1000, gamma=0.99)
+        alpha_schedulers = [
+            optim.lr_scheduler.StepLR(opt, step_size=1000, gamma=0.99)
+            for opt in agent.log_alpha_optimizers
+        ]
+    else:
+        actor_scheduler = optim.lr_scheduler.StepLR(agent.actor_optimizer, step_size=1000, gamma=0.99)
+        critic_scheduler = optim.lr_scheduler.StepLR(agent.critic_optimizer, step_size=1000, gamma=0.99)
+        alpha_scheduler = optim.lr_scheduler.StepLR(agent.log_alpha_optimizer, step_size=1000, gamma=0.99)
 
     # 创建经验回放内存
     memory = Memory(args['train']['replay_mem'], args['seed'])
@@ -118,9 +133,10 @@ def train_expert():
     begin_learn = False
     initial_memory = args['train']['initial_mem']
     num_episodes = args['train']['num_episodes']
+    current_lr = args['agent']['actor_lr']  # Initialize with base learning rate
 
     if args['env']['select_scenario'] == 1:
-        num_episodes = 100#env.NGSIM_episodes - 1
+        num_episodes = 100  # env.NGSIM_episodes - 1
         print(f'Number of episodes: {num_episodes}')
 
     for epoch in range(num_episodes):
@@ -156,7 +172,7 @@ def train_expert():
                 
                 if returns > best_eval_returns:
                     best_eval_returns = returns
-                    save(agent, -1, args, output_dir='pre_train_model')
+                    save(agent, -1, args, output_dir='pre_train_model_marl')
 
             # 训练
             if memory.size() > initial_memory:
@@ -168,14 +184,25 @@ def train_expert():
                 losses = agent.update(memory, writer, learn_steps)
 
                 # 更新学习率
-                actor_scheduler.step()
-                critic_scheduler.step()
-                alpha_scheduler.step()
+                if agent.multi_agent:
+                    for scheduler in actor_schedulers:
+                        scheduler.step()
+                    critic_scheduler.step()
+                    for scheduler in alpha_schedulers:
+                        scheduler.step()
+                    
+                    # Log learning rates for first agent as representative
+                    current_lr = actor_schedulers[0].get_last_lr()[0]
+                else:
+                    actor_scheduler.step()
+                    critic_scheduler.step()
+                    alpha_scheduler.step()
+                    current_lr = actor_scheduler.get_last_lr()[0]
 
                 if learn_steps % args['train']['log_interval'] == 0:
                     for key, loss in losses.items():
                         writer.add_scalar(key, loss, global_step=learn_steps)
-                    save(agent, epoch, args, output_dir='pre_train_model')
+                    save(agent, epoch, args, output_dir='pre_train_model_marl')
             state = next_state
 
         # 记录episode信息
@@ -184,11 +211,7 @@ def train_expert():
         writer.add_scalar('train/episode_reward', episode_reward, learn_steps)
         writer.add_scalar('train/duration', time.time() - start_time, learn_steps)
         
-        print(f'Episode {epoch}: reward={episode_reward:.2f}, steps={episode_steps}, learning_rate={actor_scheduler.get_last_lr()[0]:.2e}')
-
-        # 定期保存模型
-        #if epoch % args['train']['save_interval'] == 0:
-        #    save(agent, epoch, args)
+        print(f'Episode {epoch}: reward={episode_reward:.2f}, steps={episode_steps}, learning_rate={current_lr:.2e}')
 
 def evaluate(agent, env, num_episodes=1):
     """评估函数"""

@@ -242,8 +242,8 @@ class Trainer(pl.LightningModule):
         control_dist = 0
         value_dist = 0
         for cav_index in cav_indices:
-            control_dist += torch.square(original_controls[cav_index] - controls[cav_index]).mean()/20
-            value_dist += torch.relu(-(10 + self.critics(states, controls[cav_index]) - self.critics(states, original_controls[cav_index]))).mean()/5000
+            control_dist += torch.square(original_controls[cav_index] - controls[cav_index]).mean()/500
+        value_dist += torch.relu(-(10 + self.critics(states, controls) - self.critics(states, original_controls))).mean()/500
         
         # Get next states
         next_states = self.system.next_state(states, controls, disturbances)
@@ -274,12 +274,13 @@ class Trainer(pl.LightningModule):
                 coef_con = torch.tensor(-coupling_matrix[i][i], device=V_current.device, dtype=V_current.dtype)
                 if if_fixed_coupling:
                     for j in coupling_matrix[i]:
-                        if j >= 1:
+                        if j >= 1 and j != i:
                             decrease -= coupling_matrix[i][j] * V_current[:,j-1]
                 else:
                     for j in range(1, states.shape[1]):
-                        decrease -= coupling_matrix[i][j] * V_current[:,j-1]
-                        coef_con += coupling_matrix[i][j]
+                        if j != i:
+                            decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                            coef_con += coupling_matrix[i][j]
                 # Add disturbance term
                 #decrease -= torch.norm(disturbances[i])**2
                 V_decreases.append(decrease)
@@ -303,7 +304,7 @@ class Trainer(pl.LightningModule):
             barrier_value = self.barrier_net(states, x_stars)
             barrier_next = self.barrier_net(next_states, x_stars)
             label = check_safety(states)
-            gamma = 3e-3
+            gamma = 1e-2
             # temp_matrix = torch.tensor([[-0.1,0.02,0.01],[0.02,-0.1,0.01],[0.01,0.02,-0.1]], device=states.device, dtype=states.dtype)
 
             # safe region loss
@@ -318,14 +319,17 @@ class Trainer(pl.LightningModule):
                 loss_barrier_unsafe = torch.relu(gamma + barrier_value[unsafe_mask]).mean()
             else:
                 loss_barrier_unsafe = torch.tensor(0., device=states.device, dtype=states.dtype)
-            loss_barrier_derivative = torch.relu(barrier_value@self.barrier_net.coupling_matrix() - (barrier_next - barrier_value)).mean()
+            
+            epsilon = 1e-3
+            loss_barrier_derivative = torch.relu(barrier_value@self.barrier_net.coupling_matrix() - (barrier_next - barrier_value) - epsilon).mean()
 
-            loss_barrier_coef = torch.tensor([5, 5,0.4], device=states.device, dtype=states.dtype)
+            loss_barrier_coef = torch.tensor([4.5, 4.5, 1], device=states.device, dtype=states.dtype)
             loss_barrier = loss_barrier_coef[0] * loss_barrier_safe + loss_barrier_coef[1] * loss_barrier_unsafe + loss_barrier_coef[2] * loss_barrier_derivative
             if torch.isnan(loss_barrier).any():
                 print("loss_barrier_safe: ", loss_barrier_safe, "loss_barrier_unsafe: ", loss_barrier_unsafe, "loss_barrier_derivative: ", loss_barrier_derivative)
         else:
             loss_barrier = None
+
         if V_decreases is not None:
             return torch.stack(V_decreases), V_current, loss_barrier, control_dist, torch.stack(coef_cons), value_dist
         else:
@@ -397,9 +401,9 @@ class Trainer(pl.LightningModule):
         parameters = []
         
         # Add V_net parameters
-        #parameters.extend(self.V_net.parameters())
+        parameters.extend(self.V_net.parameters())
         parameters.extend(self.barrier_net.parameters())
-        
+
         if self.current_index > 0:
             # Add controller parameters using index
             for i in range(len(self.controllers)):
@@ -526,7 +530,9 @@ def create_platoon_connections(num_vehicles, cav_indices):
             
     return connections
 
-def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params, learning_rate, batch_size, num_epochs, system_dynamics_network=None, train_system=False, index = 0, pre_trained_model = None, pre_trained_critics = None):
+def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params, 
+               learning_rate=1e-4, batch_size=32, num_epochs=100, system_dynamics_network=None,
+               train_system=False, index=0, pre_trained_models=None, pre_trained_critics=None):
     """
     Train the platoon control system using PyTorch Lightning
     
@@ -562,35 +568,48 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     V_net = VectorLyapunovNetwork(state_dims, G)
     barrier_net = VectorBarrierNetwork(state_dims)
     controllers = nn.ModuleList([
-        NetworkController(sum(state_dims), control_dims[i]) if i in cav_indices 
+        NetworkController(2*num_vehicles, 1) if i in cav_indices  # state_dim=2*num_vehicles, control_dim=1
         else nn.Identity() for i in range(num_vehicles)
     ])
     
-    if pre_trained_model is not None:
-        raw_parameters = torch.load(pre_trained_model)
-        controller_parameters = {}
-        for k, v in raw_parameters.items():
-            if k.startswith('trunk'):
-                new_key = k.replace('trunk', '1.network')
-                # 如果是最后一层的参数，只取一半（对应均值输出）
-
-                if '1.network.4.weight' in new_key:  
-                    controller_parameters[new_key] = v[:1, :]  # 只保留第一行，对应均值
-                elif '1.network.4.bias' in new_key:
-                    controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
-                else:
-                    controller_parameters[new_key] = v
-        for i in range(len(controllers)):
-            if i in cav_indices:
-                # Remove '1.' prefix from keys
-                corrected_state_dict = {k.replace('1.', ''): v for k, v in controller_parameters.items()}
-                controllers[i].load_state_dict(corrected_state_dict)
-        #controllers.load_state_dict(controller_parameters)
-
-    critics = DoubleQCritic(sum(state_dims), control_dims[1])
+    # Load different pre-trained models for each CAV
+    if pre_trained_models is not None:
+        for i, cav_idx in enumerate(cav_indices):
+            if i < len(pre_trained_models):  # Make sure we have a model for this CAV
+                try:
+                    # Load the specific model for this CAV
+                    raw_parameters = torch.load(pre_trained_models[i])
+                    controller_parameters = {}
+                    
+                    # Process parameters
+                    for k, v in raw_parameters.items():
+                        if k.startswith('trunk'):
+                            new_key = k.replace('trunk', 'network')
+                            # For the last layer, only keep the mean output
+                            if 'network.4.weight' in new_key:  
+                                controller_parameters[new_key] = v[:1, :]  # Only keep first row for mean
+                            elif 'network.4.bias' in new_key:
+                                controller_parameters[new_key] = v[:1]  # Only keep first element for mean
+                            else:
+                                controller_parameters[new_key] = v
+                    
+                    # Load parameters into this specific CAV controller
+                    controllers[cav_idx].load_state_dict(controller_parameters)
+                    
+                    print(f"Loaded pre-trained model for CAV {cav_idx} from {pre_trained_models[i]}")
+                except Exception as e:
+                    print(f"Error loading model for CAV {cav_idx}: {e}")
+    
+    # Load pre-trained critic if provided
+    critic = None
     if pre_trained_critics is not None:
-        raw_parameters_critics = torch.load(pre_trained_critics)
-        critics.load_state_dict(raw_parameters_critics)
+        try:
+            critic = DoubleQCritic(2*num_vehicles, len(cav_indices))
+            critic.load_state_dict(torch.load(pre_trained_critics))
+            print(f"Loaded pre-trained critic from {pre_trained_critics}")
+        except Exception as e:
+            print(f"Error loading critic from {pre_trained_critics}: {e}")
+            critic = None
 
     # Initialize data module
     data_module = PlatoonDataModule(num_vehicles, cav_indices, dynamics_params, 
@@ -598,7 +617,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
 
     # Initialize trainer
     trainer = Trainer(V_net, barrier_net, controllers, system, 
-                                   learning_rate=learning_rate, current_index = index, original_controller = copy.deepcopy(controllers), critics = critics)
+                                   learning_rate=learning_rate, current_index = index, original_controller = copy.deepcopy(controllers), critics = critic)
 
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
@@ -789,7 +808,7 @@ def add_noise_to_counterexamples(counterexamples):
 def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system,
                  counterexamples, counterexample_ranges, epoch,
                  in_model, in_barrier_net, in_controller,
-                 learning_rate=1e-4, batch_size=32, index = 0, pre_trained_model = None, pre_trained_critics = None, combined_model_path = None):
+                 learning_rate=1e-4, batch_size=32, index=0, pre_trained_models=None, pre_trained_critics=None, combined_model_path=None):
     """
     Retrain the platoon control system using counterexamples
     
@@ -837,27 +856,37 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
         else nn.Identity() for i in range(num_vehicles)
     ])
 
-    if pre_trained_model is not None:
-        raw_parameters = torch.load(pre_trained_model)
-        controller_parameters = {}
-        for k, v in raw_parameters.items():
-            if k.startswith('trunk'):
-                new_key = k.replace('trunk', '1.network')
-                # 如果是最后一层的参数，只取一半（对应均值输出）
+    if pre_trained_models is not None:
+        # Load different pre-trained models for each CAV
+        for i, cav_idx in enumerate(cav_indices):
+            if i < len(pre_trained_models):  # Make sure we have a model for this CAV
+                try:
+                    # Load the specific model for this CAV
+                    raw_parameters = torch.load(pre_trained_models[i])
+                    controller_parameters = {}
+                    
+                    # Process parameters
+                    for k, v in raw_parameters.items():
+                        if k.startswith('trunk'):
+                            new_key = k.replace('trunk', 'network')
+                            # For the last layer, only keep the mean output
+                            if 'network.4.weight' in new_key:  
+                                controller_parameters[new_key] = v[:1, :]  # Only keep first row for mean
+                            elif 'network.4.bias' in new_key:
+                                controller_parameters[new_key] = v[:1]  # Only keep first element for mean
+                            else:
+                                controller_parameters[new_key] = v
+                    
+                    # Load parameters into this specific CAV controller
+                    controllers[cav_idx].load_state_dict(controller_parameters)
+                    if 'original_controllers' in locals() or 'original_controllers' in globals():
+                        original_controllers[cav_idx].load_state_dict(controller_parameters)
+                    
+                    print(f"Loaded pre-trained model for CAV {cav_idx} from {pre_trained_models[i]}")
+                except Exception as e:
+                    print(f"Error loading model for CAV {cav_idx}: {e}")
 
-                if '1.network.4.weight' in new_key:  
-                    controller_parameters[new_key] = v[:1, :]  # 只保留第一行，对应均值
-                elif '1.network.4.bias' in new_key:
-                    controller_parameters[new_key] = v[:1]  # 只保留第一个元素，对应均值
-                else:
-                    controller_parameters[new_key] = v
-        for i in range(len(controllers)):
-            if i in cav_indices:
-                # Remove '1.' prefix from keys
-                corrected_state_dict = {k.replace('1.', ''): v for k, v in controller_parameters.items()}
-                controllers[i].load_state_dict(corrected_state_dict)
-
-    critics = DoubleQCritic(sum(state_dims), control_dims[1])
+    critics = DoubleQCritic(sum(state_dims), len(cav_indices))
     if pre_trained_critics is not None:
         raw_parameters_critics = torch.load(pre_trained_critics)
         critics.load_state_dict(raw_parameters_critics)

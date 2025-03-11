@@ -143,19 +143,19 @@ class VerificationQuery:
                 ineq3.addAddend(1.0, v_next[i])
                 ineq3.addAddend(-1.0 + aii, v_current[i])
                 for j in self.system.connections[i+1]:
-                    if j >= 1:
+                    if j >= 1 and j != i+1:
                         ineq3.addAddend(-self.system.connections[i+1][j], v_current[j-1])
 
                 ineq3.setScalar(epsilon) #epsilon
 
-                disjunction.append([ineq1])
+                #disjunction.append([ineq1])
                 #disjunction_lyap.append([ineq2])
-                disjunction.append([ineq3])
+                #disjunction.append([ineq3])
 
 
 
         for i in range(self.num_lyap):
-            epsilon_CBF = -0.000001
+            epsilon_CBF = -0.000000000001
             ineq_CBF_positive = MarabouUtils.Equation(MarabouCore.Equation.GE)
             ineq_CBF_positive.addAddend(1.0, b_current[i])
             ineq_CBF_positive.setScalar(-epsilon_CBF)
@@ -175,6 +175,8 @@ class VerificationQuery:
             condition_1 = [ineq_CBF_positive, ineq_safety_con_negative]
             condition_2 = [ineq_CBF_negative, ineq_safety_con_positive]
 
+            epsilon_derivative = -0.01
+
             ineq_CBF_derivative = MarabouUtils.Equation(MarabouCore.Equation.GE)
             ineq_CBF_derivative.addAddend(-1.0, b_next[i])
             ineq_CBF_derivative.addAddend(1.0 + self.system.CBF_coupling_matrix[i][i], b_current[i])
@@ -182,7 +184,7 @@ class VerificationQuery:
                 if j != i:
                     ineq_CBF_derivative.addAddend(self.system.CBF_coupling_matrix[i][j], b_current[j])
 
-            ineq_CBF_derivative.setScalar(-epsilon_CBF)
+            ineq_CBF_derivative.setScalar(-epsilon_derivative)
 
             disjunction.append(condition_1)
             disjunction.append(condition_2)
@@ -194,45 +196,33 @@ class VerificationQuery:
         if exitCode == "sat":
             # 找到满足(违反下降条件)的反例 => 返回反例的状态 (仅示例：返回每辆车的 spacing, velocity)
             counterexample = []
-            for agent_id in range(self.num_agents):
+            spacings = []
+            velocities = []
+            ineq_CBF_derivative_learned = []
+            for agent_id in range(self.num_agents): 
                 spacing_val = vals[current_state[agent_id][0]]
                 velocity_val = vals[current_state[agent_id][1]]
+                spacings.append(spacing_val)
+                velocities.append(velocity_val)
                 counterexample.append([spacing_val, velocity_val])
 
-
-            lya_current = [vals[v_current[i]] for i in range(self.num_lyap)]
-            lya_next = [vals[v_next[i]] for i in range(self.num_lyap)]
+                if agent_id > 0:
+                    agent_CBF_derivative = -vals[b_current[agent_id-1]]
+                    agent_CBF_derivative += (1.0 + self.system.CBF_coupling_matrix[agent_id-1][agent_id-1]) * vals[b_current[agent_id-1]]
+                    for j in self.system.CBF_coupling_matrix[agent_id-1]:
+                        if j != agent_id-1:
+                            agent_CBF_derivative -= self.system.CBF_coupling_matrix[agent_id-1][j] * vals[b_current[j]]
+                    ineq_CBF_derivative_learned.append(agent_CBF_derivative)
+                
             solved_next_state = [vals[next_state[i]] for i in range(self.num_agents*2)]
 
-            ground_true = network.evaluateWithoutMarabou([np.array(counterexample)])
-            # check counter example
+            CBF_learned = [vals[b_current[i]] for i in range(self.num_lyap)]
+            CBF_true = [spacings[i] - 0.5 * velocities[i] for i in range(1,self.num_lyap+1)]
+            
             # decresing conditions
-            '''
-            ce = True
-            expr_ls = []
-            for i in range(self.num_lyap):
-                aii = 0.05
-                epsilon = 0.0
-                vars_ = [lya_next[i], lya_current[i]]
-                coeffs = [1.0, -1.0 + aii]
 
-                for j in self.system.connections[i+1]:
-                    if j >= 1:
-                        vars_.append(lya_current[j-1])
-                        coeffs.append(-self.system.connections[i+1][j])
-
-                expr = sum(v * c for v, c in zip(vars_, coeffs))
-                expr_ls.append(expr)
-                if lya_current[0]<=0 or lya_current[1]<=0 or expr >= epsilon:
-                    ce = False
-            if ce:
-                self.count_superious_ce += 1
-            #print("ground_true", ground_true)
-
-                print("counter_example", counterexample, "solved_next_state", solved_next_state,"lya_current", lya_current, "lya_next", lya_next, "expr_ls", expr_ls)
-            '''
             #print("Find counter_example", counterexample)
-            print("counter_example", counterexample, "solved_next_state", solved_next_state,"lya_current", lya_current, "lya_next", lya_next)
+            print("counter_example", counterexample, "solved_next_state", solved_next_state,"CBF_learned", CBF_learned, "CBF_true", CBF_true, "ineq_CBF_derivative_learned", ineq_CBF_derivative_learned)
             return counterexample  # 多维列表
         elif exitCode == "unsat":
             # 不可满足 => 不存在反例 => 安全

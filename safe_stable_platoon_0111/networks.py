@@ -157,9 +157,9 @@ class VectorLyapunovNetwork(nn.Module):
 
 
         # 计算每辆车的Lyapunov函数值
-        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.1  # CAV
-        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.1  # HDV
-        V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.1  # CAV
+        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.01  # CAV
+        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.01  # HDV
+        V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.01  # CAV
 
 
         # 组合所有Lyapunov函数值
@@ -234,7 +234,7 @@ class VectorBarrierNetwork(nn.Module):
 
 
 class NetworkController(nn.Module):
-    def __init__(self, state_dim, control_dim, hidden_dim=30):
+    def __init__(self, state_dim, control_dim, hidden_dim=64):
         super().__init__()
         self.network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
@@ -259,7 +259,7 @@ class NetworkController(nn.Module):
         """
         Compute control input with clamping
         """
-        u_min, u_max = u_bounds
+        #u_min, u_max = u_bounds
         x = x.reshape(-1, self.state_dim)
         x = x @ self.W_change_state_position
         x_star = x_star.reshape(-1, self.state_dim)
@@ -321,45 +321,62 @@ def orthogonal_init(layer):
     return layer
 
 def mlp(input_dim, hidden_dim, output_dim, hidden_depth):
-    if hidden_depth == 0:
-        mods = [nn.Linear(input_dim, output_dim)]
-    else:
-        mods = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
-        )
+    """Creates a multi-layer perceptron"""
+    layers = []
+    layers.append(nn.Linear(input_dim, hidden_dim))
+    layers.append(nn.ReLU())
     
-    # 对每一层进行初始化
-    trunk = nn.Sequential(*mods)
-    for m in trunk.modules():
-        orthogonal_init(m)
+    for _ in range(hidden_depth - 1):
+        layers.append(nn.Linear(hidden_dim, hidden_dim))
+        layers.append(nn.ReLU())
+        
+    layers.append(nn.Linear(hidden_dim, output_dim))
     
-    return trunk
-
-class SingleQCritic(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dim = 30, hidden_depth = 2):
-        super().__init__()
-        self.Q = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
-
-    def forward(self, obs, action, both=False):
-        obs_action = torch.cat([obs, action], dim=-1)
-        q = self.Q(obs_action)
-        return q
+    return nn.Sequential(*layers)
 
 class DoubleQCritic(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dim=30, hidden_depth = 2):
+    """Double Q-value critic with optional centralized functionality"""
+    def __init__(self, state_dim, action_dim, hidden_dim=64, hidden_depth=2, centralized=True, num_agents=3):
         super().__init__()
-        self.obs_dim = obs_dim
-        self.action_dim = action_dim
-        self.Q1 = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
-        self.Q2 = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
+        
+        self.centralized = centralized
+        self.num_agents = num_agents
+        self.multi_agent = num_agents > 1
+        self.state_dim = state_dim
+        
+        if centralized and self.multi_agent:
+            # Centralized critic gets global state and all agent actions
+            input_dim = state_dim + action_dim
+            # Use larger network for centralized critic
+            critic_hidden_dim = hidden_dim * 2
+        else:
+            # Regular critic only gets individual state and action
+            input_dim = state_dim + action_dim
+            critic_hidden_dim = hidden_dim
+        
+        self.Q1 = mlp(input_dim, critic_hidden_dim, 1, hidden_depth + (1 if centralized else 0))
+        self.Q2 = mlp(input_dim, critic_hidden_dim, 1, hidden_depth + (1 if centralized else 0))
 
+        # reshape obs similar to controller
+        self.W_change_state_position = torch.zeros(self.state_dim, self.state_dim, requires_grad=False)
+        self.W_change_state_position[1, 0] = 1
+        self.W_change_state_position[3, 1] = 1
+        self.W_change_state_position[5, 2] = 1
+        self.W_change_state_position[7, 3] = 1
+        self.W_change_state_position[0, 4] = 1
+        self.W_change_state_position[2, 5] = 1
+        self.W_change_state_position[4, 6] = 1
+        self.W_change_state_position[6, 7] = 1
 
     def forward(self, obs, action, both=False):
-        obs = obs.reshape(-1, self.obs_dim)
+        # For centralized critic, obs already contains global information
+        # reshape 32,4,2 to 32,8
+        obs = obs.reshape(-1, self.state_dim)
+        obs = obs@self.W_change_state_position
+        # stack the actions list in dimension 0
+        action = action[1:]
+        action = torch.stack(action, dim=0).squeeze(-1).permute(1,0)
+
         obs_action = torch.cat([obs, action], dim=-1)
         q1 = self.Q1(obs_action)
         q2 = self.Q2(obs_action)

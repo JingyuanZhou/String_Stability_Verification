@@ -20,13 +20,10 @@ def mlp(input_dim, hidden_dim, output_dim, hidden_depth):
     if hidden_depth == 0:
         mods = [nn.Linear(input_dim, output_dim)]
     else:
-        mods = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, output_dim)
-        )
+        mods = [nn.Linear(input_dim, hidden_dim), nn.ReLU()]
+        for _ in range(hidden_depth - 1):
+            mods += [nn.Linear(hidden_dim, hidden_dim), nn.ReLU()]
+        mods.append(nn.Linear(hidden_dim, output_dim))
     
     # 对每一层进行初始化
     trunk = nn.Sequential(*mods)
@@ -36,26 +33,60 @@ def mlp(input_dim, hidden_dim, output_dim, hidden_depth):
     return trunk
 
 class SingleQCritic(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dim, hidden_depth, args):
+    """Single Q-value critic with optional centralized functionality"""
+    def __init__(self, obs_dim, action_dim, hidden_dim, hidden_depth, args, centralized=False, num_agents=3):
         super().__init__()
-        self.Q = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
+        
+        self.centralized = centralized
+        self.num_agents = num_agents
+        self.multi_agent = num_agents > 1
+        
+        if centralized and self.multi_agent:
+            # Centralized critic gets global state and all agent actions
+            # The states already contain information for all agents
+            input_dim = obs_dim + action_dim
+            # Use larger network for centralized critic
+            critic_hidden_dim = hidden_dim * 2
+        else:
+            # Regular critic only gets individual state and action
+            input_dim = obs_dim + action_dim
+            critic_hidden_dim = hidden_dim
+            
+        self.Q = mlp(input_dim, critic_hidden_dim, 1, hidden_depth + (1 if centralized else 0))
         self.args = args
 
     def forward(self, obs, action, both=False):
+        # For centralized critic, obs already contains global information
         obs_action = torch.cat([obs, action], dim=-1)
         q = self.Q(obs_action)
         return q
 
 class DoubleQCritic(nn.Module):
-    def __init__(self, obs_dim, action_dim, hidden_dim, hidden_depth, args):
+    """Double Q-value critic with optional centralized functionality"""
+    def __init__(self, obs_dim, action_dim, hidden_dim, hidden_depth, args, centralized=False, num_agents=3):
         super().__init__()
         
-        self.Q1 = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
-        self.Q2 = mlp(obs_dim + action_dim, hidden_dim, 1, hidden_depth)
+        self.centralized = centralized
+        self.num_agents = num_agents
+        self.multi_agent = num_agents > 1
+        
+        if centralized and self.multi_agent:
+            # Centralized critic gets global state and all agent actions
+            # The states already contain information for all agents
+            input_dim = obs_dim + action_dim
+            # Use larger network for centralized critic
+            critic_hidden_dim = hidden_dim * 2
+        else:
+            # Regular critic only gets individual state and action
+            input_dim = obs_dim + action_dim
+            critic_hidden_dim = hidden_dim
+        
+        self.Q1 = mlp(input_dim, critic_hidden_dim, 1, hidden_depth + (1 if centralized else 0))
+        self.Q2 = mlp(input_dim, critic_hidden_dim, 1, hidden_depth + (1 if centralized else 0))
         self.args = args
 
-
     def forward(self, obs, action, both=False):
+        # For centralized critic, obs already contains global information
         obs_action = torch.cat([obs, action], dim=-1)
         q1 = self.Q1(obs_action)
         q2 = self.Q2(obs_action)
@@ -115,12 +146,14 @@ class DiagGaussianActor(nn.Module):
         
         self.log_std_min, self.log_std_max = log_std_bounds
         self.log_std_bounds = log_std_bounds
-        self.trunk = mlp(obs_dim, hidden_dim, 2 * action_dim, hidden_depth)
+        self.action_dim = action_dim  # Store action dimension for multi-agent handling
         
-        # 初始化最后一层的权重，避免过大的初始值
-        #self.trunk[-1].weight.data.uniform_(-1e-3, 1e-3)
-        #self.trunk[-1].bias.data.uniform_(-1e-3, 1e-3)
-
+        # Increase network capacity for multi-agent scenarios
+        if action_dim > 1:
+            # For multi-agent, use a larger network
+            hidden_dim = max(hidden_dim, 64)
+            
+        self.trunk = mlp(obs_dim, hidden_dim, 2 * action_dim, hidden_depth)
     
     def forward(self, obs):
         mu, log_std = self.trunk(obs).chunk(2, dim=-1)
@@ -132,17 +165,21 @@ class DiagGaussianActor(nn.Module):
 
         std = log_std.exp()
 
-        # self.outputs['mu'] = mu
-        # self.outputs['std'] = std
-
         dist = SquashedNormal(mu, std)
         return dist
 
     def sample(self, obs):
         dist = self.forward(obs)
         action = dist.rsample()
-        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
-
+        
+        # Calculate log_prob for each action dimension
+        log_prob = dist.log_prob(action)
+        
+        # Always ensure log_prob has shape [batch_size, action_dim]
+        if len(log_prob.shape) == 1:
+            # If log_prob is [batch_size], reshape to [batch_size, 1]
+            log_prob = log_prob.unsqueeze(-1)
+            
         return action, log_prob, dist.mean
 
 '''

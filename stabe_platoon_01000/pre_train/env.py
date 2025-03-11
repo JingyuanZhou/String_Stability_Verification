@@ -21,7 +21,7 @@ class PlatoonEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=-np.inf, 
             high=np.inf,
-            shape=(2 * self.num_vehicles,),
+            shape=(2 * (self.num_vehicles),),
             dtype=np.float32
         )
         
@@ -151,10 +151,17 @@ class PlatoonEnv(gym.Env):
             self.position[0] += self.velocity[0] * self.dt
         
     def get_obs(self):
-        return np.concatenate([
-            self.velocity,
-            self.spacing
+        velocity = self.velocity[:self.num_vehicles]
+        #velocity[-1] = 15
+        spacing = self.spacing[:self.num_vehicles]
+        #spacing[-1] = 20
+        #spacing[0] = 20
+        obs = np.concatenate([
+            velocity,
+            spacing
         ]).astype(np.float32)
+        
+        return obs
     
     def get_states(self):
         return np.concatenate([
@@ -164,7 +171,7 @@ class PlatoonEnv(gym.Env):
     
     def get_position(self):
         return self.position.astype(np.float32)
-
+ 
     def _get_reward(self):
         # 计算安全性奖励
         
@@ -183,7 +190,7 @@ class PlatoonEnv(gym.Env):
         # 计算稳定性奖励
         stability = 0
         # calculate a decay weights for stability
-        decay_weights = [0.4, 0.02]
+        decay_weights = [0.4,0.05]
         for i in range(self.cav_index[0], self.cav_index[0]+2):
             stability -= decay_weights[i - self.cav_index[0]] * (self.velocity[i] - self.velocity[i-1])**2
 
@@ -194,7 +201,7 @@ class PlatoonEnv(gym.Env):
         spacing_equilibrium = -(self.spacing[self.cav_index[0]] - self.s0)**2
         
             
-        reward_weights = [0.4, 0.3, 0.2, 0.1, 0.0]
+        reward_weights = [0.3, 0.4, 0.295, 0.005, 0.0]
         #print(f"reward_safety: {safety}, reward_efficiency: {efficiency}, reward_stability: {stability}, reward_fuel_consumption: {fuel_consumption}, reward_spacing_equilibrium: {spacing_equilibrium}")
 
         return safety * reward_weights[0] + efficiency * reward_weights[1] + stability * reward_weights[2] + fuel_consumption * reward_weights[3] + spacing_equilibrium * reward_weights[4]

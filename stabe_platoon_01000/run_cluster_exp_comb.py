@@ -3,7 +3,7 @@ import torch
 import os
 from datetime import datetime
 from generate_combined_model_torch_comb import combined_model
-from queries_comb import safe_descent_cond_check
+from queries_comb import centralized_verification, decentralized_verification
 import warnings
 import numpy as np
 warnings.filterwarnings("ignore")
@@ -30,7 +30,7 @@ dynamics_params = {
 }
 
 # Training parameters
-learning_rate = 2e-4
+learning_rate = 1e-3
 batch_size = 32
 num_epochs = 10
 
@@ -40,7 +40,7 @@ max_iters = 100
 index = 0
 out_comb_folders = "combined/"
 cur_comb_file = out_comb_folders + f"combined_{index}.onnx"
-pre_trained_id = 99
+pre_trained_id = 95
 pre_trained_model = f"pre_train_model/sac_platoon_{pre_trained_id}_actor.pth"
 pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
 #pre_trained_model = None
@@ -72,13 +72,14 @@ print("Total training time for model index", str(index), ":", str(diff.seconds))
 # Convert and combine models
 combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
 
-# Verification
+# Verification 
 st_ver_time = datetime.now()
-ret, ret_ranges, failed = safe_descent_cond_check(
+ret, ret_ranges, failed = decentralized_verification(
     cur_comb_file,
     system=system, 
     num_agents= num_vehicles
 )
+#print(ret_ranges)
 end_ver_time = datetime.now()
 diff_ver_time = end_ver_time - st_ver_time
 print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds))
@@ -89,7 +90,6 @@ num_veri_time_list.append(diff_ver_time.seconds)
 while (len(ret) > 0) and (index < max_iters):
     index += 1
     learning_rate = learning_rate * 0.9
-
     st_train_time = datetime.now()
     controllers, system, V_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 
                                                control_dims=control_dims, in_system=system, counterexamples=torch.Tensor(ret), 
@@ -102,11 +102,13 @@ while (len(ret) > 0) and (index < max_iters):
     combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
 
     st_ver_time = datetime.now()
-    ret, ret_ranges, failed = safe_descent_cond_check(
+    ret, ret_ranges, failed = decentralized_verification(
         cur_comb_file, 
         system=system,
-        num_agents= num_vehicles
+        num_agents= num_vehicles,
+        ret_ranges = ret_ranges
     )
+    #print(ret_ranges)
     end_ver_time = datetime.now()
     diff_ver_time = end_ver_time - st_ver_time
     print("Total verification time for verification index", str(index), ":", str(diff_ver_time.seconds) + "\n")
