@@ -7,6 +7,7 @@ from tqdm import tqdm
 from networks import NetworkController
 import os
 import torch.optim as optim
+import math
 
 def train_dynamics_model(model, X, X_control, Y, cav_idx, cav_indices, batch_size=32, learning_rate=0.001, model_name="dynamics_model", epochs=100):
     """
@@ -156,46 +157,17 @@ class PlatoonDynamics(nn.Module):
             
             # Apply controllers for CAVs
             for i, cav_idx in enumerate(self.cav_indices):
-                if self.controllers[cav_idx] is not None:
                     # Pass the FULL state to the controller
                     # The pre-trained controllers expect the complete state vector
-                    control_output = self.controllers[cav_idx](
-                        batch_states,  # Use full state here
-                        batch_x_star,  # Use full state here
-                        None,  # No reference control
-                        None   # No bounds
-                    ).squeeze(-1)
-                    
-                    # Store the control value
-                    control[start_idx:end_idx, cav_idx] = control_output
-                else:
-                    # Fallback to simple control law for this CAV
-                    for b in range(batch_size_actual):
-                        # Get current spacing and velocity
-                        spacing_idx = 2 * cav_idx
-                        velocity_idx = 2 * cav_idx + 1
-                        
-                        # Skip if beyond the state dimension
-                        if spacing_idx >= batch_states.shape[1] or velocity_idx >= batch_states.shape[1]:
-                            print(f"Warning: CAV {cav_idx} exceeds state dimension {batch_states.shape[1]}")
-                            continue
-                        
-                        spacing = batch_states[b, spacing_idx]
-                        velocity = batch_states[b, velocity_idx]
-                        
-                        # Simple spacing and velocity error based control
-                        spacing_error = spacing - 20.0  # Desired spacing
-                        velocity_error = velocity - 15.0  # Desired velocity
-                        
-                        # Compute control: -K[s - s_des, v - v_des]
-                        # Negative feedback control
-                        control_value = -0.5 * spacing_error - 0.7 * velocity_error
-                        
-                        # Apply control limits
-                        control_value = max(min(control_value, 5.0), -5.0)
-                        
-                        # Store control for this CAV
-                        control[start_idx + b, cav_idx] = control_value
+                control_output = self.controllers[cav_idx](
+                    batch_states,  # Use full state here
+                    batch_x_star,  # Use full state here
+                    None,  # No reference control
+                    None   # No bounds
+                ).squeeze(-1)
+                
+                # Store the control value
+                control[start_idx:end_idx, cav_idx] = control_output
             
             # Apply control for vehicle 0 (lead vehicle)
             for b in range(batch_size_actual):
@@ -571,21 +543,15 @@ class EnsembleConformalForecaster:
                 next_state[:, spacing_idx] = pred[:, 0]
                 next_state[:, velocity_idx] = pred[:, 1]
                 
-                # Set bounds using the calibrated quantiles
-                if cav_idx in self.quantiles and self.quantiles[cav_idx]["spacing"] is not None:
-                    # Spacing bounds
-                    lower_bound[:, spacing_idx] = pred[:, 0] - self.quantiles[cav_idx]["spacing"]
-                    upper_bound[:, spacing_idx] = pred[:, 0] + self.quantiles[cav_idx]["spacing"]
-                    
-                    # Velocity bounds
-                    lower_bound[:, velocity_idx] = pred[:, 1] - self.quantiles[cav_idx]["velocity"]
-                    upper_bound[:, velocity_idx] = pred[:, 1] + self.quantiles[cav_idx]["velocity"]
-                else:
-                    # If not calibrated, use a default uncertainty of 10%
-                    lower_bound[:, spacing_idx] = pred[:, 0] * 0.9
-                    upper_bound[:, spacing_idx] = pred[:, 0] * 1.1
-                    lower_bound[:, velocity_idx] = pred[:, 1] * 0.9
-                    upper_bound[:, velocity_idx] = pred[:, 1] * 1.1
+
+                # Spacing bounds
+                lower_bound[:, spacing_idx] = pred[:, 0] - self.quantiles[cav_idx]["spacing"]
+                upper_bound[:, spacing_idx] = pred[:, 0] + self.quantiles[cav_idx]["spacing"]
+                
+                # Velocity bounds
+                lower_bound[:, velocity_idx] = pred[:, 1] - self.quantiles[cav_idx]["velocity"]
+                upper_bound[:, velocity_idx] = pred[:, 1] + self.quantiles[cav_idx]["velocity"]
+
             
             # Non-CAV vehicles (lead vehicle and any HDVs) just copy from the input
             # Update lead vehicle (vehicle 0) using simple constant velocity model
@@ -596,7 +562,7 @@ class EnsembleConformalForecaster:
                 # Simple model: Constant velocity for lead vehicle
                 dt = 0.1  # Time step
                 next_state[:, 1] = v0  # Velocity stays the same
-                next_state[:, 0] = s0 + v0 * dt  # Spacing increases by velocity * time step
+                #next_state[:, 0] = s0 + v0 * dt  # Spacing increases by velocity * time step
                 
                 # No uncertainty for lead vehicle
                 lower_bound[:, 0] = next_state[:, 0]
@@ -680,7 +646,7 @@ def run_platoon_conformal_prediction():
     
     # Generate data
     print("Generating platoon data...")
-    X, X_control, Y = generate_platoon_data(num_vehicles=num_vehicles, cav_indices=cav_indices, n_samples=3000, noise_level=0.2)
+    X, X_control, Y = generate_platoon_data(num_vehicles=num_vehicles, cav_indices=cav_indices, n_samples=10000, noise_level=0.01)
     
     # Split data into train, calibration, and test sets
     print("Splitting data...")
@@ -717,9 +683,9 @@ def run_platoon_conformal_prediction():
             cav_idx=cav_idx,
             cav_indices=cav_indices,
             batch_size=64,
-            learning_rate=0.001,
+            learning_rate=0.0005,
             model_name=f"dynamics_model_cav{cav_idx}",
-            epochs=50
+            epochs=100
         )
     
     # Initialize and fit conformal predictor
@@ -743,26 +709,23 @@ def run_platoon_conformal_prediction():
     # Generate a trajectory with uncertainty bounds
     print("Generating trajectory with uncertainty bounds...")
     # Try to load controllers if available (used to generate control inputs)
-    try:
-        model.load_controllers(pre_trained_id=99)
-    except Exception as e:
-        print(f"Could not load controllers: {e}")
-        print("Will use simple control laws instead")
+
+    model.load_controllers(pre_trained_id=99)
     
     # Initial state [s0, v0, s1, v1, s2, v2, s3, v3]
     initial_state = torch.tensor([
         20.0,  # s0: Lead spacing (to virtual reference)
-        13.0,  # v0: Lead velocity
-        21.0,  # s1: CAV1 spacing
-        16.0,  # v1: CAV1 velocity
-        18.0,  # s2: CAV2 spacing
-        14.0,  # v2: CAV2 velocity
-        19.0,  # s3: CAV3 spacing
+        15.0,  # v0: Lead velocity
+        20.0,  # s1: CAV1 spacing
+        15.0,  # v1: CAV1 velocity
+        20.0,  # s2: CAV2 spacing
+        15.0,  # v2: CAV2 velocity
+        20.0,  # s3: CAV3 spacing
         15.0,  # v3: CAV3 velocity
     ], dtype=torch.float32)
     
     # Number of steps to predict
-    steps = 100
+    steps = 200
     
     # Storage for predictions
     states = [initial_state.numpy().squeeze().tolist()]
@@ -771,31 +734,42 @@ def run_platoon_conformal_prediction():
     uppers = []
     all_controls = []
     
-    # Generate the trajectory
+    # Roll out trajectory
     state = initial_state
     for t in range(steps):
-        # Extract controls from all CAVs using the model's controllers
+        # Add sinusoidal disturbance to lead vehicle velocity (vehicle 0)
+        # Period of 50 steps = 5 seconds with dt=0.1
+        # For a sine wave, one period = 2π, so frequency = 2π/50 = π/25
+        time_value = t * 0.1  # Time in seconds
+        
+        # Calculate sine with period of 50 steps
+        period_in_steps = 50
+        period_in_seconds = period_in_steps * 0.1
+        frequency = 2 * math.pi / period_in_seconds  # radians per second
+        
+        # If state is a 1D tensor, access directly
+        state[1] = 15.0 + 2.0 * torch.sin(torch.tensor(frequency * time_value))  # v0
+        
+        # Get control inputs for the current state
         full_controls = model.compute_control_actions(state, batched=False)
         
-        # Extract just the CAV controls
-        controls = torch.zeros(len(cav_indices), dtype=torch.float32)
-        for i, cav_idx in enumerate(cav_indices):
-            controls[i] = full_controls[cav_idx]
+        # Store for plotting
+        all_controls.append(full_controls.detach().numpy())
         
-        all_controls.append(controls.detach().numpy())
+        # Extract just the controls for CAVs
+        cav_controls = full_controls[cav_indices]
         
         # Get prediction with uncertainty bounds
-        mean, lower, upper = predictor.predict_with_bounds(state.unsqueeze(0), controls.unsqueeze(0))
-        
-        # Update state for next step (use the mean prediction)
-        state = mean
+        mean, lower, upper = predictor.predict_with_bounds(state, cav_controls)
         
         # Store predictions
-        states.append(state.numpy().squeeze().tolist())
-        means.append(mean.numpy().squeeze().tolist())
-        lowers.append(lower.numpy().squeeze().tolist())
-        uppers.append(upper.numpy().squeeze().tolist())
-    
+        means.append(mean[0].detach().numpy())
+        lowers.append(lower[0].detach().numpy())
+        uppers.append(upper[0].detach().numpy())
+        
+        # Update state for next step
+        state = mean[0]
+
     # Convert to arrays
     means = np.array(means)
     lowers = np.array(lowers)
