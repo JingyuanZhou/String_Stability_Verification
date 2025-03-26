@@ -244,7 +244,7 @@ class StringStabilityTrainer(pl.LightningModule):
                 controls.append(None)
                 original_controls.append(None)
         
-        cav_indices = [1]
+        cav_indices = [1,3]
         control_dist = torch.tensor(0.0, device=states.device)
         value_dist = torch.tensor(0.0, device=states.device)
         for cav_index in cav_indices:
