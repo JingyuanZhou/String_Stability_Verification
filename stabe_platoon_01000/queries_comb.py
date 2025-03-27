@@ -323,7 +323,7 @@ class DecentralizedVerificationQuery:
         
         return current_state, next_state, v_current, v_next
 
-    def check_descent(self, input_bounds, epsilon=0.01, useMILP=True):
+    def check_descent(self, input_bounds, epsilon=0.0000001, useMILP=True):
         """
         Verify Lyapunov descent condition for a single agent considering only its neighbors.
         

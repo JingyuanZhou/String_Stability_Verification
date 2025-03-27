@@ -39,7 +39,7 @@ class GraphCouplingMatrix(nn.Module):
         A_tilde = torch.relu(self.coupling_matrix)
         
         # Apply adjacency matrix mask
-        A_masked = torch.clamp(A_tilde * G, 0, 2)
+        A_masked = torch.clamp(A_tilde * G, 0, 0.1)
         
         # 3. **对角优势调整**
         row_sum = torch.sum(A_masked, dim=1) - 2*torch.diag(A_masked)  # 计算非对角元素之和
@@ -134,10 +134,10 @@ class VectorLyapunovNetwork(nn.Module):
         x_star_1 = torch.matmul(x_star, self.W_star)
 
         # 计算每辆车的Lyapunov函数值
-        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.001  # CAV #0.1
-        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.01  # HDV
-        V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.01  # HDV
-        V_4 = self.network_4(x4) - self.network_4(x_star_1) + 0.01 # HDV
+        V_1 = self.network_1(x1) - self.network_1(x_star_1) + 0.00001  # CAV #0.1
+        V_2 = self.network_2(x2) - self.network_2(x_star_1) + 0.00001  # HDV
+        V_3 = self.network_3(x3) - self.network_3(x_star_1) + 0.00001  # HDV
+        V_4 = self.network_4(x4) - self.network_4(x_star_1) + 0.00001 # HDV
 
         # 组合所有Lyapunov函数值
         V = torch.cat([V_1, V_2, V_3, V_4], dim=1)

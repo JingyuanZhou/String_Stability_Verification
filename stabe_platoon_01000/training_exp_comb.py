@@ -3,7 +3,7 @@ import torch.nn as nn
 import lightning.pytorch as pl
 from torch.utils.data import TensorDataset, DataLoader
 import numpy as np
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from networks import NetworkController, VectorLyapunovNetwork, system_network, DoubleQCritic
 import torch.onnx
 
@@ -244,7 +244,7 @@ class StringStabilityTrainer(pl.LightningModule):
                 controls.append(None)
                 original_controls.append(None)
         
-        cav_indices = [1,3]
+        cav_indices = [1]
         control_dist = torch.tensor(0.0, device=states.device)
         value_dist = torch.tensor(0.0, device=states.device)
         for cav_index in cav_indices:
@@ -300,15 +300,15 @@ class StringStabilityTrainer(pl.LightningModule):
         states, x_stars, disturbances = batch
 
         # Compute vector Lyapunov conditions
-        epsilon = 1e-3
+        epsilon = 1e-5
         V_decreases, V_current, control_dist, coef_cons, value_dist, dist_ratio = self.vector_lyapunov_conditions(states, x_stars, disturbances)
         losses = []
         # Lyapunov decrease condition loss
-        loss_decrease = 1000 * torch.relu(V_decreases + epsilon).mean()
+        loss_decrease = 2000 * torch.relu(V_decreases + epsilon).mean()
         losses.append(loss_decrease)
         
         # Lyapunov positive condition loss
-        loss_positive = 50 * torch.relu(-V_current + epsilon).mean()
+        loss_positive = 1000 * torch.relu(-V_current + 1e-8).mean()
         losses.append(loss_positive)
         
         # Control and value distance loss
@@ -327,16 +327,14 @@ class StringStabilityTrainer(pl.LightningModule):
         self.log("loss_positive", torch.relu(-V_current).mean(), prog_bar=True)
         self.log("loss_control", control_dist + value_dist, prog_bar=True)
         #return total_loss
+        self.scheduler.step()
 
     def validation_step(self, batch, batch_idx):
         
         states, x_stars, disturbances = batch
-        epsilon = 1e-3
         V_decreases, V_current, control_dist, coef_cons, value_dist, dist_ratio = self.vector_lyapunov_conditions(states, x_stars, disturbances)
-        if self.current_index == 0:
-            val_loss = 50 * torch.relu(-V_current+epsilon).mean() + 1000*torch.relu(V_decreases + epsilon).mean() # +control_dist+ value_dist + torch.relu(coef_cons).mean()
-        else: 
-            val_loss = 50 * torch.relu(-V_current+epsilon).mean() + 1000*torch.relu(V_decreases + epsilon).mean() #+ control_dist+ value_dist + reward_related_loss + torch.relu(coef_cons).mean()    
+
+        val_loss = 50 * torch.relu(-V_current).mean() + 1000*torch.relu(V_decreases).mean() # +control_dist+ value_dist + torch.relu(coef_cons).mean()
         
         # Log validation loss - this is crucial for ModelCheckpoint
         self.log('val_loss', val_loss, prog_bar=True)
@@ -349,13 +347,14 @@ class StringStabilityTrainer(pl.LightningModule):
         # Add V_net parameters
         parameters.extend(self.V_net.parameters())
 
-        if self.current_index > 1:
+        if self.current_index > 0:
             print("add controllers parameters")
             for i in range(len(self.controllers)):
                 if self.controllers[i] is not None and hasattr(self.controllers[i], 'parameters'):
                     parameters.extend(self.controllers[i].parameters())
 
         optimizer = torch.optim.Adam(parameters, lr=self.learning_rate)
+        self.scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.9)
 
         return optimizer
 
@@ -421,9 +420,9 @@ class PlatoonDataModule(pl.LightningDataModule):
         disturbances = torch.stack(disturbances)
 
         self.train_data = (
-            states[:, :train_size,:].transpose(0, 1),  # [train_size, num_vehicles, 2]
-            x_stars[:, :train_size,:].transpose(0, 1),                  # [train_size, num_vehicles, 2]
-            disturbances[:, :train_size].transpose(0, 1)  # [train_size, num_vehicles]
+            states[:, :,:].transpose(0, 1),  # [train_size, num_vehicles, 2]
+            x_stars[:, :,:].transpose(0, 1),                  # [train_size, num_vehicles, 2]
+            disturbances[:, :].transpose(0, 1)  # [train_size, num_vehicles]
         )
         
         self.val_data = (
@@ -547,6 +546,14 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     trainer = StringStabilityTrainer(V_net, controllers, system, 
                                    learning_rate=learning_rate, current_index = index, original_controller = controllers, critics = critics)
 
+    early_stopping_callback = EarlyStopping(
+        monitor='val_loss',
+        min_delta=0.0,
+        patience=10,
+        mode='min',
+        verbose=True
+    )
+
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath='model_weights',
@@ -558,8 +565,8 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     # Train the system
     pl_trainer = pl.Trainer(
         max_epochs=num_epochs,
-        check_val_every_n_epoch=5,
-        callbacks=[checkpoint_callback],
+        check_val_every_n_epoch=1,
+        callbacks=[checkpoint_callback, early_stopping_callback],
         enable_checkpointing=True
     )
     pl_trainer.fit(trainer, data_module)
@@ -634,6 +641,7 @@ class PlatoonDataModuleRetrain(pl.LightningDataModule):
         
         # 保存新的训练数据
         torch.save(combined_data, self.out_train_file)
+        torch.save(combined_val_data, self.out_val_file)
         
         # 创建数据集
         self.train_dataset = TensorDataset(*combined_data)
@@ -713,7 +721,7 @@ def add_noise_to_counterexamples(counterexamples):
     
     counter_example_expanded = counterexamples
     for i in range(19):
-        noise = (torch.rand_like(counterexamples) - 0.5) * 0.01 * (i+1)
+        noise = (torch.rand_like(counterexamples) - 0.5) * 0.02
         noise[:, 0, 0] = 0.0  # No noise on first vehicle spacing
         noise[:, 0, 1] = 0.0  # No noise on first vehicle velocity
         counter_example_expanded = torch.cat([counter_example_expanded, counterexamples + noise], dim=0)
@@ -805,6 +813,13 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
     #    primal_learning_rate=learning_rate
     #)
 
+    early_stopping_callback = EarlyStopping(
+        monitor='val_loss',
+        min_delta=0.0,
+        patience=10,
+        mode='min',
+        verbose=True
+    )
     # Setup checkpointing
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
@@ -818,8 +833,9 @@ def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system
     # Train the system
     pl_trainer = pl.Trainer(
         max_epochs=epoch,
-        callbacks=[checkpoint_callback],
-        enable_checkpointing=True
+        callbacks=[checkpoint_callback, early_stopping_callback],
+        enable_checkpointing=True,
+        check_val_every_n_epoch=1
     )
     
     pl_trainer.fit(trainer, data_module)
