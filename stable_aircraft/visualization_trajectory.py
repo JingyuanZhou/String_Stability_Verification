@@ -20,7 +20,7 @@ dynamics_params = {
 }
 
 # Set global plotting style
-plt.style.use('seaborn-white')
+#plt.style.use('seaborn-white')
 plt.rcParams["font.family"] = "Times New Roman"
 plt.rcParams['font.size'] = 12
 plt.rcParams['axes.labelsize'] = 14
@@ -372,6 +372,35 @@ plt.savefig('output_figures/uav2_lyapunov_3d.pdf', format='pdf', bbox_inches='ti
 plt.close()
 
 # 2D contour plots
+# First follower individual plot
+fig = plt.figure(figsize=(10, 8), dpi=300)
+contour1 = plt.contourf(X, Y, Z1, cmap='viridis', levels=20, alpha=0.95)
+plt.plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
+plt.xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
+plt.ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
+plt.title('Lyapunov Function (UAV 1)', fontsize=16)
+plt.colorbar(contour1, label='Lyapunov Value')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.savefig('output_figures/uav1_lyapunov_2d.pdf', format='pdf', bbox_inches='tight', dpi=300)
+plt.close()
+
+# Second follower individual plot
+fig = plt.figure(figsize=(10, 8), dpi=300)
+contour2 = plt.contourf(X, Y, Z2, cmap='plasma', levels=20, alpha=0.95)
+plt.plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
+plt.xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
+plt.ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
+plt.title('Lyapunov Function (UAV 2)', fontsize=16)
+plt.colorbar(contour2, label='Lyapunov Value')
+plt.legend()
+plt.grid(True)
+plt.tight_layout()
+plt.savefig('output_figures/uav2_lyapunov_2d.pdf', format='pdf', bbox_inches='tight', dpi=300)
+plt.close()
+
+# Combined 2D contour plots
 fig, axes = plt.subplots(1, 2, figsize=(16, 8), dpi=300)
 
 # Follower 1 contour

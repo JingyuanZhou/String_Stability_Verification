@@ -8,14 +8,14 @@ num_veri_time_list = np.load("data/num_veri_time_list.npy")
 print(num_ce_list)
 print(num_veri_time_list)
 
-plt.style.use('seaborn-white')  # 使用清爽的背景样式
+#plt.style.use('seaborn-white')  # 使用清爽的背景样式
 # Set font to Times New Roman
 plt.rcParams["font.family"] = "Times New Roman"
 
 # Increase figure resolution
 plt.figure(figsize=(8, 6), dpi=300)  # Higher DPI for better clarity
 
-vis_index = [str(581+i) for i in range(2)]
+vis_index = [str(958+i) for i in range(1)]
 num_colors = len(vis_index)
 color_map = plt.get_cmap("tab10", num_colors)  # Dynamically get 'tab10' colormap
 color_index = color_map(np.arange(num_colors))  # Assign unique colors
@@ -26,10 +26,7 @@ for index in range(len(vis_index)):
 
     df = reader.scalars
     # Filter train_loss data
-    if vis_index[index] == "581":
-        df = df[df["tag"] == "train_loss"]
-    else:
-        df = df[df["tag"] == "val_loss"]
+    df = df[df["tag"] == "val_loss"]
 
     epoch_df = df[df["tag"] == "train_loss_epoch"]
 

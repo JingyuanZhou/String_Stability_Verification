@@ -8,7 +8,7 @@ num_veri_time_list = np.load("data/num_veri_time_list.npy")
 print(num_ce_list)
 print(num_veri_time_list)
 
-plt.style.use('seaborn-white')  # 使用清爽的背景样式
+#plt.style.use('seaborn-white')  # 使用清爽的背景样式
 # Set font to Times New Roman
 plt.rcParams["font.family"] = "Times New Roman"
 

@@ -22,7 +22,7 @@ dynamics_params = {
 }
 
 # 设置全局样式
-plt.style.use('seaborn-white')  # 使用清爽的背景样式
+#plt.style.use('seaborn-white')  # 使用清爽的背景样式
 
 plt.rcParams["font.family"] = "Times New Roman"
 plt.rcParams['font.size'] = 12  # 设置默认字体大小
