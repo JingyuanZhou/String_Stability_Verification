@@ -1,4 +1,4 @@
-from microgrid_simulate import MicrogridSimulator
+from pre_train_model.microgrid_simulate import MicrogridSimulator
 import numpy as np
 import torch
 import torch.nn as nn
@@ -351,11 +351,11 @@ def NN_control_training(dataloader: DataLoader,
     
     for i in range(n_inverters):
         if i == 0:
-            model = ControllerNN(input_dim=9, output_dim=1).to(device)  # [state(3) + neighbor(3) + target(3)]
+            model = ControllerNN(input_dim=6, output_dim=1).to(device)  # [state(3) + neighbor(3)]
         elif i == n_inverters - 1:
-            model = ControllerNN(input_dim=9, output_dim=1).to(device)  # [state(3) + neighbor(3) + target(3)]
+            model = ControllerNN(input_dim=6, output_dim=1).to(device)  # [state(3) + neighbor(3)]
         else:
-            model = ControllerNN(input_dim=12, output_dim=1).to(device)  # [state(3) + neighbors(6) + target(3)]
+            model = ControllerNN(input_dim=9, output_dim=1).to(device)  # [state(3) + neighbors(6)]
         
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         scheduler = optim.lr_scheduler.ReduceLROnPlateau(
@@ -401,16 +401,18 @@ def NN_control_training(dataloader: DataLoader,
                 # Get data for current inverter
                 current_state = current_states[:, i, :]  # [batch, 3]
                 target_state = target_states[:, i, :]  # [batch, 3]
+
+                current_state = current_state - target_state
                 
                 if i == 0:
                     current_neighbor_state = current_neighbor_states[:, i, 1, :]  # [batch, 3]
-                    input_state = torch.cat([current_state, current_neighbor_state, target_state], dim=-1)
+                    input_state = torch.cat([current_state, current_neighbor_state], dim=-1)
                 elif i == n_inverters - 1:
                     current_neighbor_state = current_neighbor_states[:, i, 0, :]  # [batch, 3]
-                    input_state = torch.cat([current_state, current_neighbor_state, target_state], dim=-1)
+                    input_state = torch.cat([current_state, current_neighbor_state], dim=-1)
                 else:
                     current_neighbor_state = current_neighbor_states[:, i, :, :].reshape(-1, 6)  # [batch, 6]
-                    input_state = torch.cat([current_state, current_neighbor_state, target_state], dim=-1)
+                    input_state = torch.cat([current_state, current_neighbor_state], dim=-1)
                 
                 # Forward pass
                 pred = models[i](input_state)
