@@ -232,6 +232,7 @@ class MicrogridSimulator:
         
         plt.tight_layout()
         plt.show()
+        plt.savefig('output_figures/microgrid_states.png', dpi=300)
 
 if __name__ == "__main__":
     # System parameters from Table II

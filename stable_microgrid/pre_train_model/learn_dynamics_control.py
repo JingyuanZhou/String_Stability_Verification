@@ -36,7 +36,7 @@ class DynamicsNN(nn.Module):
         neighbor_flat = neighbor_state.reshape(neighbor_state.shape[0], -1)
         
         # Concatenate all inputs
-        x = torch.cat([state, neighbor_flat, control.unsqueeze(-1)], dim=-1)
+        x = torch.cat([state, neighbor_flat, control], dim=-1)
         
         # Predict state derivatives
         return self.net(x)

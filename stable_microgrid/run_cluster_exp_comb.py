@@ -7,6 +7,7 @@ from generate_combined_model_torch_comb import combined_model
 from queries_comb import centralized_verification, decentralized_verification
 import warnings
 import numpy as np
+from networks import CombinedSystemDynamics
 warnings.filterwarnings("ignore")
 
 # System parameters
@@ -29,6 +30,8 @@ out_comb_folders = "combined/"
 cur_comb_file = out_comb_folders + f"combined_{index}.onnx"
 pre_trained_model = f"pre_train_model/controller_model.pth"
 pre_trained_dynamics = f"pre_train_model/dynamics_model.pth"
+
+combined_system_dynamics = CombinedSystemDynamics(state_dim=state_dims[0], neighbor_dim=state_dims[0], control_dim=control_dims[0], hidden_dim=64)
 
 # Dynamics parameters for microgrid
 dynamics_params = {
@@ -65,7 +68,7 @@ diff = end_train_time - st_train_time
 print("Total training time for model index", str(index), ":", str(diff.seconds))
 
 # Convert and combine models
-combined_model(V_net, controller, system.neural_systems, cur_comb_file, state_dims, controlled_indices)
+combined_model(V_net, controller, combined_system_dynamics, cur_comb_file, state_dims, controlled_indices)
 
 # Verification 
 st_ver_time = datetime.now()
@@ -92,7 +95,7 @@ while (len(ret) > 0) and (index < max_iters):
     diff = end_train_time - st_train_time
     print("Total training time for model index", str(index), ":", str(diff.seconds))
 
-    combined_model(V_net, controller, system.neural_systems, cur_comb_file, state_dims, controlled_indices)
+    combined_model(V_net, controller, combined_system_dynamics, cur_comb_file, state_dims, controlled_indices)
 
     st_ver_time = datetime.now()
     ret, ret_ranges, failed = decentralized_verification(

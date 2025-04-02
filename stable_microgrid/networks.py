@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import numpy as np
+from pre_train_model.learn_dynamics_control import DynamicsNN
 
 class GraphCouplingMatrix(nn.Module):
     def __init__(self, N, G):
@@ -75,7 +76,7 @@ class VectorLyapunovNetwork(nn.Module):
         )
 
         self.network_2 = nn.Sequential(
-            nn.Linear(input_dim, hidden_dim),
+            nn.Linear(input_dim + 2, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
@@ -90,16 +91,10 @@ class VectorLyapunovNetwork(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
+        self.networks = [self.network_1, self.network_2, self.network_3]
+
         if G is not None:
             self.coupling_matrix = GraphCouplingMatrix(self.num_inverters, G)
-
-        # matrix for inverter state selection [batch_size, n_inverters*3] -> [batch_size, 3]
-        self.state_inv1_matrix = torch.zeros((self.num_inverters)*3, 3)
-        self.state_inv1_matrix[:3, :] = torch.eye(3)
-        self.state_inv2_matrix = torch.zeros((self.num_inverters)*3, 3)
-        self.state_inv2_matrix[3:6, :] = torch.eye(3)
-        self.state_inv3_matrix = torch.zeros((self.num_inverters)*3, 3)
-        self.state_inv3_matrix[6:9, :] = torch.eye(3)
 
 
     def forward(self, state):
@@ -113,16 +108,26 @@ class VectorLyapunovNetwork(nn.Module):
         Returns:
             torch.Tensor: Lyapunov function value [batch_size, 2]
         """
-        state_inv1 = state @ self.state_inv1_matrix
-        state_inv2 = state @ self.state_inv2_matrix
-        state_inv3 = state @ self.state_inv3_matrix
-
-        equilibrium_state = state_inv1*0
-
-        V_1 = self.network_1(state_inv1) + self.network_1(equilibrium_state)*(-1) + 0.001
-        V_2 = self.network_2(state_inv2) + self.network_2(equilibrium_state)*(-1) + 0.001
-        V_3 = self.network_3(state_inv3) + self.network_3(equilibrium_state)*(-1) + 0.001
-        V = torch.cat([V_1, V_2, V_3], dim=-1)
+        # error state -> e_delta_ij = e_delta_i - e_delta_j, e_omega_i = e_omega_i - e_omega_star, e_xi_ij = e_xi_i - e_xi_j
+        V = []
+        for i in range(self.num_inverters):
+            e_delta_ij = []
+            e_omega_i = state[:, i*3+1:i*3+2]
+            e_xi_i = []
+            if i-1 >= 0:
+                e_delta_ij.append((state[:, i*3:i*3+1] - state[:, (i-1)*3:(i-1)*3+1]))
+                e_xi_i.append((state[:, i*3+2:i*3+3] - state[:, (i-1)*3+2:(i-1)*3+3]))
+            if i+1 < self.num_inverters:
+                e_delta_ij.append((state[:, i*3:i*3+1] - state[:, (i+1)*3:(i+1)*3+1]))
+                e_xi_i.append((state[:, i*3+2:i*3+3] - state[:, (i+1)*3+2:(i+1)*3+3]))
+            e_delta_ij = torch.cat(e_delta_ij, dim=-1)
+            e_xi_i = torch.cat(e_xi_i, dim=-1)  
+            #e_omega_i = e_omega_i.unsqueeze(1)
+            #print(e_delta_ij.shape, e_omega_i.shape, e_xi_i.shape)
+            error_state = torch.cat([e_delta_ij, e_omega_i, e_xi_i], dim=-1)
+            V_i = self.networks[i](error_state)
+            V.append(V_i)
+        V = torch.cat(V, dim=-1)
         return V
 
 class ControllerNN(nn.Module):
@@ -198,3 +203,47 @@ class CombinedController(nn.Module):
         control_3 = self.controller_3(state_3)
         
         return torch.cat([control_1, control_2, control_3], dim=-1) 
+    
+
+class CombinedSystemDynamics(nn.Module):
+    def __init__(self, state_dim, neighbor_dim, control_dim, hidden_dim=64):
+        super(CombinedSystemDynamics, self).__init__()
+        self.num_inverters = 3
+        self.dynamics_1 = DynamicsNN(state_dim, neighbor_dim, control_dim, hidden_dim)
+        self.dynamics_2 = DynamicsNN(state_dim, neighbor_dim*2, control_dim, hidden_dim)
+        self.dynamics_3 = DynamicsNN(state_dim, neighbor_dim, control_dim, hidden_dim)
+
+        self.control_selection_1 = torch.zeros(3, 1)
+        self.control_selection_2 = torch.zeros(3, 1)
+        self.control_selection_3 = torch.zeros(3, 1)
+        self.control_selection_1[0, 0] = 1
+        self.control_selection_2[1, 0] = 1
+        self.control_selection_3[2, 0] = 1
+
+    def forward(self, state, control):
+        """
+        Forward pass.
+        
+        Args:
+            state (torch.Tensor): Input state [batch_size, num_inverters*input_dim]
+        
+        Returns:
+            torch.Tensor: Control inputs [batch_size, num_inverters*output_dim]
+        """
+        state_ego_1 = state[:, :3]  # [state(3) + neighbor(3) + target(3)]
+        state_ego_2 = state[:, 3:6]  # [state(3) + neighbors(6) + target(3)]
+        state_ego_3 = state[:, 6:9]  # [state(3) + neighbor(3) + target(3)]
+        control_1 = control@self.control_selection_1#.squeeze(1)
+        control_2 = control@self.control_selection_2#.squeeze(1)
+        control_3 = control@self.control_selection_3#.squeeze(1)
+
+
+        state_1_neighbor = state_ego_2
+        state_2_neighbor = torch.cat([state_ego_1, state_ego_3], dim=-1)
+        state_3_neighbor = state_ego_1
+
+        next_state_1 = self.dynamics_1(state_ego_1, state_1_neighbor, control_1)
+        next_state_2 = self.dynamics_2(state_ego_2, state_2_neighbor, control_2)
+        next_state_3 = self.dynamics_3(state_ego_3, state_3_neighbor, control_3)
+
+        return torch.cat([next_state_1, next_state_2, next_state_3], dim=-1)

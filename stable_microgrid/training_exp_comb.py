@@ -115,7 +115,7 @@ class MicrogridFormationDynamics(InterconnectedSystem):
             next_states.append(self.neural_systems[i](
                 states[:, i, :],
                 neighbor_states,
-                control[:, i]
+                control[:, i].unsqueeze(-1)
             ))
 
         # Stack all states together
@@ -145,7 +145,7 @@ class MicrogridDataModule(pl.LightningDataModule):
         # Frequency (omega) - uniform distribution around nominal frequency
         states[:, 0, 1] = self.omega_star + (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 200
         # Controller state (xi) - uniform distribution
-        states[:, 0, 2] = (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 10
+        states[:, 0, 2] = (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 20
 
         # For other inverters, generate states with appropriate variations
         for i in range(1, self.n_inverters):
@@ -155,7 +155,7 @@ class MicrogridDataModule(pl.LightningDataModule):
             # Frequency - uniform distribution around nominal frequency
             states[:, i, 1] = self.omega_star + (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 200
             # Controller state - uniform distribution
-            states[:, i, 2] = (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 10
+            states[:, i, 2] = (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 20
         
         # Random disturbances for each inverter
         # Shape: [num_samples, n_inverters, 3] for (delta_dist, omega_dist, xi_dist)

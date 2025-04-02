@@ -305,26 +305,24 @@ def centralized_verification(
     return vals_found, val_ranges, verification_result
 
 class DecentralizedVerificationQuery:
-    def __init__(self, PATH, system, agent_id, num_uavs=3):
+    def __init__(self, PATH, system, agent_id, num_inverters=3):
         """
-        Initialize a decentralized verification query for UAV formation
+        Initialize a decentralized verification query for microgrid
         
         Args:
             PATH: Path to the ONNX model
-            system: UAV system model
-            agent_id: The specific UAV this query is for (1 or 2 for followers)
-            num_uavs: Number of UAVs in the formation (3 for leader + 2 followers)
+            system: Microgrid system model
+            agent_id: The specific inverter this query is for (1 or 2 for followers)
+            num_inverters: Number of inverters in the microgrid
         """
         self.PATH = PATH
-        self.agent_id = agent_id  # The specific agent this query is for
-        self.num_uavs = num_uavs
+        self.agent_id = agent_id  # The specific inverter this query is for
+        self.num_inverters = num_inverters
         self.system = system
-        self.dt = 0.1
-        self.dim = 3  # 3D space
+        self.dt = 0.01
         
     def run_unroll(self, network):
-        """Decentralized verification logic for a single agent
-        """
+        """Decentralized verification logic for a single inverter"""
         current_state = network.inputVars[0][0]
         v_current = network.outputVars[0][0]
         next_state = network.outputVars[1]
@@ -334,10 +332,10 @@ class DecentralizedVerificationQuery:
 
     def check_descent(self, input_bounds, epsilon=0.000001, useMILP=True):
         """
-        Verify Lyapunov descent condition for a single UAV considering only its neighbors.
+        Verify Lyapunov descent condition for a single inverter considering only its neighbors.
         
         Args:
-            input_bounds: Bounds only for the states of the UAV and its neighbors
+            input_bounds: Bounds for the states of all inverters [delta, omega, xi]
             epsilon: Descent condition constant
             useMILP: Whether to use MILP solver
         """
@@ -352,19 +350,18 @@ class DecentralizedVerificationQuery:
 
         current_state, next_state, v_current, v_next = self.run_unroll(network)
 
-        # Get neighbors of the current UAV
+        # Get neighbors of the current inverter
         neighbors = [j for j in self.system.connections[self.agent_id].keys()]
         
-        
-        # Set bounds for all UAVs in the formation
-        for uav_id in range(self.num_uavs):
-            # For neighbors, use the provided bounds
-            for i in range(6):
-                lo, hi = input_bounds[uav_id*6 + i]
-                network.setLowerBound(current_state[uav_id][i], lo)
-                network.setUpperBound(current_state[uav_id][i], hi)
+        # Set bounds for all inverters in the microgrid
+        for inv_id in range(self.num_inverters):
+            # For each inverter, set bounds on delta, omega, xi
+            for i in range(3):
+                lo, hi = input_bounds[inv_id*3 + i]
+                network.setLowerBound(current_state[inv_id*3 + i], lo)
+                network.setUpperBound(current_state[inv_id*3 + i], hi)
 
-        # Add Lyapunov descent constraint only for this UAV
+        # Add Lyapunov descent constraint only for this inverter
         disjunction = []
         
         # Positive constraint: V(x) > epsilon
@@ -382,7 +379,7 @@ class DecentralizedVerificationQuery:
         ineq2.addAddend(1.0, v_next[self.agent_id-1])
         ineq2.addAddend(-1.0 + aii, v_current[self.agent_id-1])
 
-        # Add influence from neighboring UAVs
+        # Add influence from neighboring inverters
         for j in self.system.connections[self.agent_id]:
             if j >= 1 and j != self.agent_id:
                 # For each neighbor (except leader and self), add its influence
@@ -398,21 +395,17 @@ class DecentralizedVerificationQuery:
         exitCode, vals, stats = network.solve(options=options, verbose=False)
 
         if exitCode == "sat":
-            # Found counterexample - return states of all UAVs
+            # Found counterexample - return states of all inverters
             counterexample = []
-            for uav_id in range(self.num_uavs):
-                pos_x = vals[current_state[uav_id][0]]
-                pos_y = vals[current_state[uav_id][1]]
-                pos_z = vals[current_state[uav_id][2]]
-                vel_x = vals[current_state[uav_id][3]]
-                vel_y = vals[current_state[uav_id][4]]
-                vel_z = vals[current_state[uav_id][5]]
-                counterexample.append([pos_x, pos_y, pos_z, vel_x, vel_y, vel_z])
+            for inv_id in range(self.num_inverters):
+                delta = vals[current_state[inv_id*3 + 0]]
+                omega = vals[current_state[inv_id*3 + 1]]
+                xi = vals[current_state[inv_id*3 + 2]]
+                counterexample.append([delta, omega, xi])
             
             # Get Lyapunov values for analysis
             lya_current = vals[v_current[self.agent_id-1]]
             lya_next = vals[v_next[self.agent_id-1]]
-            # solved_next_state = [vals[next_state[self.agent_id-1][i]] for i in range(self.num_uavs*6)]
             
             # Verify constraint violation for debugging
             expr_ls = []
@@ -443,170 +436,138 @@ class DecentralizedVerificationQuery:
 def decentralized_verification(
     PATH_TO_ONNX,
     system,
-    num_uavs=3,
+    num_inverters=3,
     ret_ranges=None
 ):
     """
-    Decentralized verification for a 3-UAV formation (1 leader + 2 followers).
-    Verifies each follower UAV separately by checking its Lyapunov function
+    Decentralized verification for a microgrid (1 reference + follower inverters).
+    Verifies each inverter separately by checking its Lyapunov function
     considering only its connections to neighbors.
     
     Args:
         PATH_TO_ONNX: Path to the ONNX model
-        system: UAV system model with connection information
-        limit_pos: Position limit for verification region
-        vel_limit: Velocity limit for verification region
-        num_uavs: Number of UAVs in the formation (3 for leader + 2 followers)
+        system: Microgrid system model with connection information
+        num_inverters: Number of inverters in the microgrid
         ret_ranges: Optional parameter for returning specific ranges
         
     Returns:
         vals_found: List of counterexamples found
         val_ranges: Corresponding state bounds for counterexamples
-        results: Verification results for each UAV
+        results: Verification results for each inverter
     """
     vals_found = []
     val_ranges = []
     failed_vals = []
     results = []
-    delta_ref = 10
+    omega_star = 2 * np.pi * 50  # Nominal frequency (50 Hz)
     
-    # Verify each follower UAV separately
-    for agent_id in range(1, 2): #num_uavs
-        print(f"\n=== Verifying Follower UAV {agent_id} ===")
-        query = DecentralizedVerificationQuery(PATH_TO_ONNX, system, agent_id, num_uavs)
+    # Verify each follower inverter separately
+    for inv_id in range(num_inverters):
+        print(f"\n=== Verifying Follower Inverter {inv_id} ===")
+        query = DecentralizedVerificationQuery(PATH_TO_ONNX, system, inv_id, num_inverters)
         
-        # Get neighbors for this UAV
-        neighbors = [j for j in system.connections[agent_id].keys()]
-        print(f"UAV {agent_id} has neighbors: {neighbors}")
+        # Get neighbors for this inverter
+        neighbors = [j for j in system.connections[inv_id].keys()]
+        print(f"Inverter {inv_id} has neighbors: {neighbors}")
         
-        # Create grid divisions with different resolutions for each UAV
-        split_num = [10, 6]
+        # Create grid divisions with different resolutions for each parameter
+        split_nums = [4,4,4]  # Different resolutions to try
         
-        # Define spacing and velocity ranges for verification 
-        # Focus only on x-direction errors
-        x_spacing_error_range = []
-        x_velocity_error_range = []
-        for k in split_num:
-            x_spacing_error_range.append(np.linspace(-3, 3, k) + delta_ref)  # x-position range
-            x_velocity_error_range.append(np.linspace(-3, 3, k))  # x-velocity range
+        # Define angle and frequency error ranges for verification
+        delta_range = []
+        omega_error_range = []
+        xi_range = []
+        
+        for k in split_nums:
+            delta_range.append(np.linspace(0, 10, k))  # Phase angle error range (rad)
+            omega_error_range.append(np.linspace(-50, 50.0, k))  # Frequency error range (rad/s)
+            xi_range.append(np.linspace(0,10, k))    # Controller state error range
 
         # Helper function to generate all combinations of neighbor bounds
         def generate_neighbor_bounds(index):
-            # Initialize bounds with equilibrium values for all UAVs
-            # For each UAV: [x, y, z, vx, vy, vz]
+            # Initialize bounds with equilibrium values for all inverters
+            # For each inverter: [delta, omega, xi]
             base_bounds = []
             
-            # Initialize all dimensions for all UAVs with equilibrium values
-            for uav_id in range(num_uavs):
-                # Spacing bounds (x, y, z)
-                for i in range(3):
-                    if i == 0:  # x position
-                        if uav_id == 0:
-                            base_bounds.append([0.0, 0.0])  # Default x-error position (equilibrium spacing)
-                        else:
-                            base_bounds.append([delta_ref, delta_ref])    # Keep error position at 0
-                    else:  # y, z positions
-                        base_bounds.append([0.0, 0.0])    # Keep error position at 0
+            # Initialize all dimensions for all inverters with equilibrium values
+            for i in range(num_inverters):
+                # Delta bounds (phase angle)
+                base_bounds.append([0.0, 0.0])  # Equilibrium phase angle
                 
-                # Velocity bounds (vx, vy, vz)
-                for i in range(3):
-                    if i == 0:  # x velocity
-                        base_bounds.append([0.0, 0.0])  # Default x-error velocity (equilibrium)
-                    else:  # vy, vz
-                        base_bounds.append([0.0, 0.0])    # Keep error velocity at 0
+                # Omega bounds (frequency)
+                base_bounds.append([omega_star, omega_star])  # Equilibrium frequency
+                
+                # Xi bounds (secondary controller state)
+                base_bounds.append([0.0, 0.0])  # Equilibrium controller state
             
-            # Generate indices and ranges for each neighbor's states (x dimension only)
+            # Generate indices and ranges for each neighbor's states
             neighbor_indices = []
             neighbor_ranges = []
             
+            # First add the inverter being verified (we'll vary all its states)
+            neighbor_indices.extend([
+                (inv_id, 'delta'), 
+                (inv_id, 'omega'), 
+                (inv_id, 'xi')
+            ])
+            neighbor_ranges.extend([
+                range(len(delta_range[index])-1),
+                range(len(omega_error_range[index])-1),
+                range(len(xi_range[index])-1)
+            ])
             
-            # Then add other relevant neighbors (excluding the leader)
+            # Then add other relevant neighbors (excluding the reference inverter 0)
             for neighbor in neighbors:
-                if neighbor != 0:  # Skip leader and the UAV being verified (already added)
-                    # For each neighbor, we only vary x-position and x-velocity
-                    neighbor_indices.extend([(neighbor, 'x'), (neighbor, 'vx')])
+                if neighbor != 0 and neighbor != inv_id:  # Skip reference and self
+                    # For each neighbor, we vary all states
+                    neighbor_indices.extend([
+                        (neighbor, 'delta'), 
+                        (neighbor, 'omega'), 
+                        (neighbor, 'xi')
+                    ])
                     neighbor_ranges.extend([
-                        range(len(x_spacing_error_range[index])-1), 
-                        range(len(x_velocity_error_range[index])-1)
+                        range(len(delta_range[index])-1),
+                        range(len(omega_error_range[index])-1),
+                        range(len(xi_range[index])-1)
                     ])
             
-            # Generate all combinations of grid points for UAV being verified and its neighbors
+            # Generate all combinations of grid points for the inverter being verified and its neighbors
             for idx_combination in itertools.product(*neighbor_ranges):
                 current_bounds = base_bounds.copy()
                 
-                # Apply each index to the corresponding neighbor's x states
+                # Apply each index to the corresponding neighbor's states
                 for (neighbor_idx, state_type), grid_idx in zip(neighbor_indices, idx_combination):
-                    if state_type == 'x':
-                        # Update x-position bounds (first coordinate of each UAV)
-                        x_pos_idx = neighbor_idx * 6  # Each UAV has 6 states
-                        current_bounds[x_pos_idx] = [
-                            x_spacing_error_range[index][grid_idx],
-                            x_spacing_error_range[index][grid_idx + 1],
+                    if state_type == 'delta':
+                        # Update delta bounds
+                        delta_idx = neighbor_idx * 3  # Each inverter has 3 states
+                        delta_lo = delta_range[index][grid_idx]
+                        delta_hi = delta_range[index][grid_idx + 1]
+                        current_bounds[delta_idx] = [delta_lo, delta_hi]
+                    elif state_type == 'omega':
+                        # Update omega bounds (add error to nominal frequency)
+                        omega_idx = neighbor_idx * 3 + 1
+                        omega_error_lo = omega_error_range[index][grid_idx]
+                        omega_error_hi = omega_error_range[index][grid_idx + 1]
+                        current_bounds[omega_idx] = [
+                            omega_star + omega_error_lo,
+                            omega_star + omega_error_hi
                         ]
-                    elif state_type == 'vx':
-                        # Update x-velocity bounds (fourth coordinate of each UAV)
-                        vx_idx = neighbor_idx * 6 + 3  # Position index + 3 = velocity index
-                        current_bounds[vx_idx] = [
-                            x_velocity_error_range[index][grid_idx],
-                            x_velocity_error_range[index][grid_idx + 1]
-                        ]
+                    elif state_type == 'xi':
+                        # Update xi bounds
+                        xi_idx = neighbor_idx * 3 + 2
+                        xi_lo = xi_range[index][grid_idx]
+                        xi_hi = xi_range[index][grid_idx + 1]
+                        current_bounds[xi_idx] = [xi_lo, xi_hi]
                 
                 yield current_bounds
 
         # Verify each combination of neighbor states
         idx = 0
-        agent_vals_found = []
-        agent_failed_vals = []
+        inv_vals_found = []
+        inv_failed_vals = []
         
-        for error_state_bounds in generate_neighbor_bounds(agent_id-1):
-            # transform error_state_bounds to state_bounds
-            state_bounds = []
-            for i in range(len(error_state_bounds)):
-                # Get UAV index and dimension type
-                uav_idx = i // 6  # Each UAV has 6 states [x,y,z,vx,vy,vz]
-                dim_type = i % 6  # 0,1,2 = position, 3,4,5 = velocity
-                
-                if uav_idx == 0:
-                    # Leader UAV (fixed reference)
-                    if dim_type == 0:  # x position
-                        state_bounds.append([0.0, 0.0])  # Leader at origin
-                    elif dim_type == 1 or dim_type == 2:  # y, z position
-                        state_bounds.append([0.0, 0.0])  # No y, z displacement
-                    elif dim_type == 3:  # x velocity
-                        state_bounds.append([5.0, 5.0])  # Fixed cruise velocity
-                    else:  # vy, vz
-                        state_bounds.append([0.0, 0.0])  # No y, z velocity
-                else:
-                    # Follower UAVs
-                    if dim_type == 0:  # x position
-                        # Calculate absolute position from spacing error
-                        # Position = Leader position - (desired spacing + error)
-                        if uav_idx>agent_id:
-                            pos_lo = -delta_ref*(uav_idx)
-                            pos_hi = -delta_ref*(uav_idx)
-                        else:
-                            error_lo, error_hi = error_state_bounds[i]
-                            pos_lo = state_bounds[i-6][0] - error_hi  # Smaller error means larger negative position
-                            pos_hi = state_bounds[i-6][1] - error_lo  # Larger error means smaller negative position
-                        state_bounds.append([pos_lo, pos_hi])
-                    elif dim_type == 1 or dim_type == 2:  # y, z position
-                        state_bounds.append([0.0, 0.0])  # No y, z displacement
-                    elif dim_type == 3:  # x velocity
-                        # Calculate absolute velocity from velocity error
-                        # Velocity = Leader velocity + error
-                        if uav_idx>agent_id:
-                            vel_lo = 5
-                            vel_hi = 5
-                        else:
-                            error_lo, error_hi = error_state_bounds[i]
-                            vel_lo = state_bounds[i-6][0] + error_lo
-                            vel_hi = state_bounds[i-6][1] + error_hi
-                        state_bounds.append([vel_lo, vel_hi])
-                    else:  # vy, vz
-                        state_bounds.append([0.0, 0.0])  # No y, z velocity
-            
-            print(f'Verifying UAV {agent_id}, combination {idx}')
-            # Show bounds for this UAV and its neighbors
+        for state_bounds in generate_neighbor_bounds(inv_id-1):
+            print(f'Verifying Inverter {inv_id}, combination {idx}')
             
             # Run verification query
             ans = query.check_descent(state_bounds)
@@ -614,32 +575,32 @@ def decentralized_verification(
             
             if isinstance(ans, list) and len(ans) > 1:
                 # Found counterexample
-                agent_vals_found.append(ans)
+                inv_vals_found.append(ans)
                 vals_found.append(ans)
                 val_ranges.append(state_bounds)
             elif ans[0] == -1:
                 # Verification failed
-                agent_failed_vals.append(ans)
+                inv_failed_vals.append(ans)
                 failed_vals.append(ans)
 
-        # Determine verification result for this UAV
-        if len(agent_vals_found) > 0:
-            result = f"UAV {agent_id}: Failed (found {len(agent_vals_found)} counterexamples)"
-        elif len(agent_failed_vals) > 0:
-            result = f"UAV {agent_id}: Inconclusive ({len(agent_failed_vals)} queries failed)"
+        # Determine verification result for this inverter
+        if len(inv_vals_found) > 0:
+            result = f"Inverter {inv_id}: Failed (found {len(inv_vals_found)} counterexamples)"
+        elif len(inv_failed_vals) > 0:
+            result = f"Inverter {inv_id}: Inconclusive ({len(inv_failed_vals)} queries failed)"
         else:
-            result = f"UAV {agent_id}: Succeeded (string stability verified)"
+            result = f"Inverter {inv_id}: Succeeded (stability verified)"
 
         results.append(result)
         print(result)
     
     # Determine overall verification result
     if len(vals_found) > 0:
-        overall_result = f"UAV Formation: Failed (found {len(vals_found)} counterexamples total)"
+        overall_result = f"Microgrid: Failed (found {len(vals_found)} counterexamples total)"
     elif len(failed_vals) > 0:
-        overall_result = f"UAV Formation: Inconclusive ({len(failed_vals)} queries failed total)"
+        overall_result = f"Microgrid: Inconclusive ({len(failed_vals)} queries failed total)"
     else:
-        overall_result = f"UAV Formation: Succeeded (string stability verified for all followers)"
+        overall_result = f"Microgrid: Succeeded (stability verified for all inverters)"
     
     results.append(overall_result)
     print(f"\n{overall_result}")
