@@ -125,7 +125,8 @@ class VectorLyapunovNetwork(nn.Module):
             #e_omega_i = e_omega_i.unsqueeze(1)
             #print(e_delta_ij.shape, e_omega_i.shape, e_xi_i.shape)
             error_state = torch.cat([e_delta_ij, e_omega_i, e_xi_i], dim=-1)
-            V_i = self.networks[i](error_state)
+            equilibrium_state = torch.zeros_like(error_state)
+            V_i = self.networks[i](error_state) - self.networks[i](equilibrium_state) + 0.001
             V.append(V_i)
         V = torch.cat(V, dim=-1)
         return V

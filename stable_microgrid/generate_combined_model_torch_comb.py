@@ -49,6 +49,7 @@ class CombinedMicrogridNetwork(nn.Module):
         # Calculate next states
         x_true = x + self.x_equilibrium
         next_state = self.system_dynamics(x_true, control)
+        next_state = next_state - self.x_equilibrium
         
         next_V = self.V_net(next_state)
             

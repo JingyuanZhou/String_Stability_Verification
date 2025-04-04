@@ -141,21 +141,21 @@ class MicrogridDataModule(pl.LightningDataModule):
         
         # First inverter (reference)
         # Phase angle (delta) - uniform distribution around 0
-        states[:, 0, 0] = torch.zeros(num_samples, dtype=torch.float32)  # [-0.1, 0.1]
+        states[:, 0, 0] = torch.rand(num_samples, dtype=torch.float32) * np.pi/4
         # Frequency (omega) - uniform distribution around nominal frequency
-        states[:, 0, 1] = self.omega_star + (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 200
+        states[:, 0, 1] = self.omega_star + (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 100
         # Controller state (xi) - uniform distribution
-        states[:, 0, 2] = (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 20
+        states[:, 0, 2] = 0#torch.rand(num_samples, dtype=torch.float32) * 5
 
         # For other inverters, generate states with appropriate variations
         for i in range(1, self.n_inverters):
             # Phase angle - uniform variations relative to previous inverter
-            states[:, i, 0] = states[:, i-1, 0] + torch.rand(num_samples, dtype=torch.float32) * np.pi/2
+            states[:, i, 0] = torch.rand(num_samples, dtype=torch.float32) * np.pi/4
             
             # Frequency - uniform distribution around nominal frequency
-            states[:, i, 1] = self.omega_star + (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 200
+            states[:, i, 1] = self.omega_star + (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 100
             # Controller state - uniform distribution
-            states[:, i, 2] = (torch.rand(num_samples, dtype=torch.float32) - 0.5) * 20
+            states[:, i, 2] = 0#torch.rand(num_samples, dtype=torch.float32) * 5
         
         # Random disturbances for each inverter
         # Shape: [num_samples, n_inverters, 3] for (delta_dist, omega_dist, xi_dist)
@@ -261,9 +261,9 @@ class StringStabilityTrainer(pl.LightningModule):
         # Calculate error states for each inverter
         batch_size = states.shape[0]
         equilibrium = torch.zeros(batch_size, 9, device=states.device)
-        equilibrium[:, 0] = self.system.omega_star
-        equilibrium[:, 3] = self.system.omega_star
-        equilibrium[:, 6] = self.system.omega_star
+        equilibrium[:, 1] = self.system.omega_star
+        equilibrium[:, 4] = self.system.omega_star
+        equilibrium[:, 7] = self.system.omega_star
         states_flatten = states.reshape(batch_size, -1)
         states_equilibrium = states_flatten - equilibrium
         
@@ -282,11 +282,11 @@ class StringStabilityTrainer(pl.LightningModule):
         
         # Calculate V decreases for string stability
         V_decreases = []
-        for i in range(1, states.shape[1]):
-            decrease = (V_next[:, i-1] - (1-coupling_matrix[i][i])*V_current[:, i-1])
-            for j in range(1, states.shape[1]):
+        for i in range(states.shape[1]):
+            decrease = (V_next[:, i] - (1-coupling_matrix[i][i])*V_current[:, i])
+            for j in range(states.shape[1]):
                 if j != i and j in self.system.connections[i]:
-                    decrease -= coupling_matrix[i][j] * V_current[:, j-1]
+                    decrease -= coupling_matrix[i][j] * V_current[:, j]
             V_decreases.append(decrease)
         
         # Calculate control distance from original controller
@@ -302,12 +302,12 @@ class StringStabilityTrainer(pl.LightningModule):
         opts.zero_grad()
         states, disturbances = batch
         
-        epsilon = 1e-5
+        epsilon = 1e-3
         V_decreases, V_current, control_dist = self.vector_lyapunov_conditions(states, disturbances)
         
         # Loss components for string stability
         loss_decrease = 2000 * torch.relu(V_decreases + epsilon).mean()  # Ensure V decreases
-        loss_positive = 200 * torch.relu(-V_current + epsilon).mean()   # Ensure V is positive
+        loss_positive = 1000 * torch.relu(-V_current + epsilon*10).mean()   # Ensure V is positive
         
         # Control loss to maintain similar behavior to original controller
         loss_control = control_dist.mean()
@@ -545,7 +545,7 @@ def add_noise_to_counterexamples(counterexamples):
         tensor: expanded counterexamples with added noise
     """
     counter_example_expanded = counterexamples
-    for i in range(19):
+    for i in range(9):
         noise = (torch.rand_like(counterexamples) - 0.5) * 0.2
         # Add appropriate noise for each state variable
         # Phase angle (delta) - small variations
@@ -555,7 +555,7 @@ def add_noise_to_counterexamples(counterexamples):
         noise[:, :, 1] *= 0.5  # [-0.5, 0.5] rad/s
         
         # Controller state (xi) - small variations
-        noise[:, :, 2] *= 0.1  # [-0.1, 0.1]
+        noise[:, :, 2] *= 0.0  # [-0.1, 0.1]
         
         # Add the noisy counterexamples
         counter_example_expanded = torch.cat([counter_example_expanded, counterexamples + noise], dim=0)

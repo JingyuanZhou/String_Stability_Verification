@@ -8,9 +8,10 @@ from pre_train_model.learn_dynamics_control import DynamicsNN, ControllerNN
 from networks import CombinedController
 import os
 from matplotlib import cm
+import numpy as np
 
 # Microgrid Lyapunov Function Analysis
-check_point = torch.load('model_weights/best_microgrid_model-v29.ckpt')
+check_point = torch.load('model_weights/best_microgrid_model-v91.ckpt')
 parameters = check_point['state_dict']
 
 # Extract controller parameters for the CombinedController
@@ -77,8 +78,8 @@ omega_star = 2 * np.pi * 50  # 50 Hz
 
 # Define parameter ranges for visualization
 # delta_range = np.linspace(-5, 5, 100)  # Phase angle error range
-delta_error_range = np.linspace(-100, 100, 100)  # Fixed value for controller state
-omega_range = np.linspace(-10.0, 10.0, 100)  # Frequency error range
+delta_error_range = np.linspace(-np.pi/4, np.pi/4, 100)  # Fixed value for controller state -np.pi/4, np.pi/4
+omega_range = np.linspace(-50.0, 50.0, 100)  # Frequency error range
 xi_fixed = 0.0  # Fixed value for controller state
 
 # Create mesh grid for 3D plots
@@ -109,12 +110,13 @@ for i, omega in enumerate(omega_range):
                 state[0, 3] = 0
                 state[0, 4] = xi_fixed  # xi (fixed)
 
+            equilibrium_state = torch.zeros_like(state)
             if k == 0:
-                lyapunov_value = V_net.network_1(state)
+                lyapunov_value = V_net.network_1(state) - V_net.network_1(equilibrium_state) + 0.001    
             elif k == 1:
-                lyapunov_value = V_net.network_2(state)
+                lyapunov_value = V_net.network_2(state) - V_net.network_2(equilibrium_state) + 0.001
             else:
-                lyapunov_value = V_net.network_3(state)
+                lyapunov_value = V_net.network_3(state) - V_net.network_3(equilibrium_state) + 0.001
             
             lyapunov_values.append(lyapunov_value)
             
@@ -131,7 +133,7 @@ for inv_idx in range(num_inverters):
     
     # Add labels and title
     ax.set_xlabel('Frequency Error (rad/s)')
-    ax.set_ylabel('Controller State (rad)')
+    ax.set_ylabel('Delta Error (rad)')
     ax.set_zlabel('Lyapunov Value')
     ax.set_title(f'Inverter {inv_idx+1} Lyapunov Function')
     

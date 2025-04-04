@@ -19,9 +19,9 @@ num_ce_list = []
 num_veri_time_list = []
 
 # Training parameters
-learning_rate = 1e-3
+learning_rate = 3e-4
 batch_size = 32
-num_epochs = 30
+num_epochs = 80
 max_iters = 100
 
 # File paths

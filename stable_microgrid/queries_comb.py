@@ -9,6 +9,7 @@ import sys
 sys.path.append("/home/zhoujy53/Desktop/Marabou")
 from maraboupy import Marabou
 from maraboupy import MarabouCore, MarabouUtils
+import torch
 
 
 #from training_exp_mask import LyapunovNetworkV, TwoDimDocking
@@ -366,7 +367,7 @@ class DecentralizedVerificationQuery:
         
         # Positive constraint: V(x) > epsilon
         ineq1 = MarabouUtils.Equation(MarabouCore.Equation.LE)
-        ineq1.addAddend(1.0, v_current[self.agent_id-1])
+        ineq1.addAddend(1.0, v_current[self.agent_id])
         ineq1.setScalar(-epsilon)
         
         # Descent constraint considering only neighbors
@@ -376,14 +377,14 @@ class DecentralizedVerificationQuery:
         aii = self.system.connections[self.agent_id][self.agent_id]
         
         # Add terms for Lyapunov function decrease condition
-        ineq2.addAddend(1.0, v_next[self.agent_id-1])
-        ineq2.addAddend(-1.0 + aii, v_current[self.agent_id-1])
+        ineq2.addAddend(1.0, v_next[self.agent_id])
+        ineq2.addAddend(-1.0 + aii, v_current[self.agent_id])
 
         # Add influence from neighboring inverters
         for j in self.system.connections[self.agent_id]:
             if j >= 1 and j != self.agent_id:
                 # For each neighbor (except leader and self), add its influence
-                ineq2.addAddend(-self.system.connections[self.agent_id][j], v_current[j-1])
+                ineq2.addAddend(-self.system.connections[self.agent_id][j], v_current[j])
                 
         ineq2.setScalar(epsilon)
 
@@ -404,8 +405,8 @@ class DecentralizedVerificationQuery:
                 counterexample.append([delta, omega, xi])
             
             # Get Lyapunov values for analysis
-            lya_current = vals[v_current[self.agent_id-1]]
-            lya_next = vals[v_next[self.agent_id-1]]
+            lya_current = vals[v_current[self.agent_id]]
+            lya_next = vals[v_next[self.agent_id]]
             
             # Verify constraint violation for debugging
             expr_ls = []
@@ -415,16 +416,22 @@ class DecentralizedVerificationQuery:
             
             # Add terms for neighbors
             for j in self.system.connections[self.agent_id]:
-                if j >= 1 and j != self.agent_id:
-                    vars_.append(vals[v_current[j-1]])
+                if j != self.agent_id:
+                    vars_.append(vals[v_current[j]])
                     coeffs.append(-self.system.connections[self.agent_id][j])
                     
             # Calculate the expression value
             expr = sum(v * c for v, c in zip(vars_, coeffs))
             expr_ls.append(expr)
+            next_state_values = [vals[next_state[0][i]] for i in range(self.num_inverters*3)]
             
-            print(f"state: {counterexample}, lya_current: {lya_current}, lya_next: {lya_next}, expr: {expr_ls}")
+            print(f"state: {counterexample}, next_state: {next_state_values}, lya_current: {lya_current}, lya_next: {lya_next}, expr: {expr_ls}")
             
+            omega_star = 2 * torch.pi * 50  # Nominal frequency (50 Hz)
+            counterexample[0][1] += omega_star
+            counterexample[1][1] += omega_star
+            counterexample[2][1] += omega_star
+
             return counterexample
         elif exitCode == "unsat":
             # No counterexample found - property holds
@@ -440,20 +447,15 @@ def decentralized_verification(
     ret_ranges=None
 ):
     """
-    Decentralized verification for a microgrid (1 reference + follower inverters).
-    Verifies each inverter separately by checking its Lyapunov function
-    considering only its connections to neighbors.
+    Verify stability of the entire microgrid by checking each inverter's Lyapunov function.
     
     Args:
-        PATH_TO_ONNX: Path to the ONNX model
-        system: Microgrid system model with connection information
-        num_inverters: Number of inverters in the microgrid
-        ret_ranges: Optional parameter for returning specific ranges
-        
-    Returns:
-        vals_found: List of counterexamples found
-        val_ranges: Corresponding state bounds for counterexamples
-        results: Verification results for each inverter
+        onnx_path: Path to the ONNX model
+        system: Microgrid system model
+        delta_range: Range of delta values for each inverter
+        omega_error_range: Range of omega error values for each inverter
+        xi_range: Range of xi values for each inverter
+        omega_star: Nominal frequency
     """
     vals_found = []
     val_ranges = []
@@ -462,7 +464,7 @@ def decentralized_verification(
     omega_star = 2 * np.pi * 50  # Nominal frequency (50 Hz)
     
     # Verify each follower inverter separately
-    for inv_id in range(num_inverters):
+    for inv_id in range(num_inverters-2):
         print(f"\n=== Verifying Follower Inverter {inv_id} ===")
         query = DecentralizedVerificationQuery(PATH_TO_ONNX, system, inv_id, num_inverters)
         
@@ -478,10 +480,10 @@ def decentralized_verification(
         omega_error_range = []
         xi_range = []
         
-        for k in split_nums:
-            delta_range.append(np.linspace(0, 10, k))  # Phase angle error range (rad)
-            omega_error_range.append(np.linspace(-50, 50.0, k))  # Frequency error range (rad/s)
-            xi_range.append(np.linspace(0,10, k))    # Controller state error range
+        for k_ in range(len(split_nums)):
+            delta_range.append(np.linspace(0, np.pi/4, split_nums[k_]))  # Phase angle error range (rad)
+            omega_error_range.append(np.linspace(-50, 50.0, split_nums[k_]))  # Frequency error range (rad/s)
+            xi_range.append(np.array([0,0]))    # Controller state error range np.linspace(0, 5, split_nums[k])
 
         # Helper function to generate all combinations of neighbor bounds
         def generate_neighbor_bounds(index):
@@ -491,20 +493,19 @@ def decentralized_verification(
             
             # Initialize all dimensions for all inverters with equilibrium values
             for i in range(num_inverters):
-                # Delta bounds (phase angle)
-                base_bounds.append([0.0, 0.0])  # Equilibrium phase angle
-                
-                # Omega bounds (frequency)
-                base_bounds.append([omega_star, omega_star])  # Equilibrium frequency
-                
-                # Xi bounds (secondary controller state)
-                base_bounds.append([0.0, 0.0])  # Equilibrium controller state
+                    # Delta bounds (phase angle)
+                    base_bounds.append([0.0, 0.0])  # Equilibrium phase angle
+                    
+                    # Omega bounds (frequency)
+                    base_bounds.append([0.0, 0.0])  # Equilibrium frequency
+                    
+                    # Xi bounds (secondary controller state)
+                    base_bounds.append([0.0, 0.0])  # Equilibrium controller state
             
             # Generate indices and ranges for each neighbor's states
             neighbor_indices = []
             neighbor_ranges = []
-            
-            # First add the inverter being verified (we'll vary all its states)
+
             neighbor_indices.extend([
                 (inv_id, 'delta'), 
                 (inv_id, 'omega'), 
@@ -515,22 +516,30 @@ def decentralized_verification(
                 range(len(omega_error_range[index])-1),
                 range(len(xi_range[index])-1)
             ])
-            
-            # Then add other relevant neighbors (excluding the reference inverter 0)
-            for neighbor in neighbors:
-                if neighbor != 0 and neighbor != inv_id:  # Skip reference and self
-                    # For each neighbor, we vary all states
-                    neighbor_indices.extend([
-                        (neighbor, 'delta'), 
-                        (neighbor, 'omega'), 
-                        (neighbor, 'xi')
-                    ])
-                    neighbor_ranges.extend([
-                        range(len(delta_range[index])-1),
-                        range(len(omega_error_range[index])-1),
-                        range(len(xi_range[index])-1)
-                    ])
-            
+            # First add the inverter being verified (we'll vary all its states)
+            if inv_id < num_inverters-1:
+                neighbor_indices.extend([
+                    (inv_id+1, 'delta'), 
+                    (inv_id+1, 'omega'), 
+                    (inv_id+1, 'xi')
+                ])
+                neighbor_ranges.extend([
+                    range(len(delta_range[index])-1),
+                    range(len(omega_error_range[index])-1),
+                    range(len(xi_range[index])-1)
+                ])
+            elif inv_id > 0:
+                neighbor_indices.extend([
+                    (inv_id-1, 'delta'), 
+                    (inv_id-1, 'omega'), 
+                    (inv_id-1, 'xi')
+                ])
+                neighbor_ranges.extend([
+                    range(len(delta_range[index])-1),
+                    range(len(omega_error_range[index])-1),
+                    range(len(xi_range[index])-1)
+                ])
+
             # Generate all combinations of grid points for the inverter being verified and its neighbors
             for idx_combination in itertools.product(*neighbor_ranges):
                 current_bounds = base_bounds.copy()
@@ -549,8 +558,8 @@ def decentralized_verification(
                         omega_error_lo = omega_error_range[index][grid_idx]
                         omega_error_hi = omega_error_range[index][grid_idx + 1]
                         current_bounds[omega_idx] = [
-                            omega_star + omega_error_lo,
-                            omega_star + omega_error_hi
+                            omega_error_lo,
+                            omega_error_hi
                         ]
                     elif state_type == 'xi':
                         # Update xi bounds
@@ -558,7 +567,7 @@ def decentralized_verification(
                         xi_lo = xi_range[index][grid_idx]
                         xi_hi = xi_range[index][grid_idx + 1]
                         current_bounds[xi_idx] = [xi_lo, xi_hi]
-                
+
                 yield current_bounds
 
         # Verify each combination of neighbor states
@@ -566,9 +575,8 @@ def decentralized_verification(
         inv_vals_found = []
         inv_failed_vals = []
         
-        for state_bounds in generate_neighbor_bounds(inv_id-1):
+        for state_bounds in generate_neighbor_bounds(inv_id):
             print(f'Verifying Inverter {inv_id}, combination {idx}')
-            
             # Run verification query
             ans = query.check_descent(state_bounds)
             idx += 1
