@@ -8,6 +8,7 @@ import torch.onnx
 import matplotlib.pyplot as plt
 import os
 import torch.nn.functional as F
+from lightning.pytorch.strategies import DDPStrategy
 
 from networks import VectorLyapunovNetwork, CombinedController
 
@@ -193,12 +194,13 @@ class MicrogridDataModule(pl.LightningDataModule):
 
 class StringStabilityTrainer(pl.LightningModule):
     def __init__(self, controller, system, V_net, learning_rate=1e-3, 
-                 current_index=None, original_controller=None):
+                 current_index=None, original_controller=None, device=None, mode=None):
         super().__init__()
         self.controller = controller
         self.system = system
         self.V_net = V_net
         self.learning_rate = learning_rate
+        self._device = device
         if current_index is None:
             self.current_index = 0
         else:
@@ -208,10 +210,11 @@ class StringStabilityTrainer(pl.LightningModule):
 
         self.original_controller = original_controller
         self.automatic_optimization = False
+        self.mode = mode
 
     def configure_optimizers(self):
         # parameters of vector lyapunov network and controller
-        if self.current_index > 0:
+        if self.current_index > 0 or self.mode==0 or self.mode==1:
             parameters = list(self.V_net.parameters()) + list(self.controller.parameters())
         else:
             parameters = list(self.V_net.parameters())
@@ -282,21 +285,40 @@ class StringStabilityTrainer(pl.LightningModule):
         
         # Calculate V decreases for string stability
         V_decreases = []
+        Loss_A_list = []
         for i in range(states.shape[1]):
-            decrease = (V_next[:, i] - (1-coupling_matrix[i][i])*V_current[:, i])
-            for j in range(states.shape[1]):
-                if j != i and j in self.system.connections[i]:
-                    decrease -= coupling_matrix[i][j] * V_current[:, j]
-            V_decreases.append(decrease)
-        
+            if self.mode == 0:
+                decrease = (V_next[:, i] - (1-coupling_matrix[i][i])*V_current[:, i])
+                for j in range(states.shape[1]):
+                    if j != i and j in self.system.connections[i]:
+                        decrease -= coupling_matrix[i][j] * V_current[:, j]
+                V_decreases.append(decrease)
+            elif self.mode == 1:
+                Loss_A = V_current[:,i-1]
+                max_other_V = None
+                for j in range(1, states.shape[1]):
+                    if j != i:
+                        if max_other_V == None:
+                            max_other_V = V_current[:,j-1]
+                        else:
+                            max_other_V = torch.max(max_other_V, V_current[:,j-1])
+                Loss_A = Loss_A - 0.1*max_other_V
+
+                Loss_B = V_next[:,i-1] - V_current[:,i-1] + 0.01*V_current[:,i-1]
+
+                V_decreases.append(Loss_B)
+                Loss_A_list.append(Loss_A)
         # Calculate control distance from original controller
         control_dist = torch.tensor(0.0, device=states.device)
         if self.original_controller is not None:
             original_controls = self.original_controller(states_equilibrium)
             control_dist += torch.norm(controls - original_controls, dim=1).mean()/100
         
-        return torch.stack(V_decreases), V_current, control_dist
-    
+        if self.mode == 0:
+            return torch.stack(V_decreases), V_current, control_dist
+        elif self.mode == 1:
+            return torch.stack(V_decreases), torch.stack(Loss_A_list), control_dist
+        
     def training_step(self, batch, batch_idx):
         opts = self.optimizers()
         opts.zero_grad()
@@ -342,7 +364,7 @@ class StringStabilityTrainer(pl.LightningModule):
 
 
 def train_model(num_inverters=3, controlled_indices=None, state_dims=None, control_dims=None, 
-               dynamics_params=None, learning_rate=1e-3, batch_size=32, num_epochs=100):
+               dynamics_params=None, learning_rate=1e-3, batch_size=32, num_epochs=100, device=None, mode=None):
     """
     Train a model for microgrid control using Vector Lyapunov Functions
     
@@ -380,7 +402,7 @@ def train_model(num_inverters=3, controlled_indices=None, state_dims=None, contr
     system = MicrogridFormationDynamics(dynamics_params, connection_matrix)
     
     # Create binary adjacency matrix for VLF
-    G = torch.zeros(len(system.connections), len(system.connections))
+    G = torch.zeros(len(system.connections), len(system.connections)).to(device)
     for i in system.connections:
         for j in system.connections[i]:
             G[i, j] = 0.01
@@ -400,7 +422,7 @@ def train_model(num_inverters=3, controlled_indices=None, state_dims=None, contr
     controller = CombinedController(
         input_dim=3,  # Current state + neighbor states
         output_dim=1  # Control input
-    )
+    ).to(device)
     
     # Load pre-trained controller weights
     controller.controller_1.load_state_dict(torch.load("pre_train_model/control_model_0.pth"))
@@ -411,7 +433,7 @@ def train_model(num_inverters=3, controlled_indices=None, state_dims=None, contr
     original_controller = CombinedController(
         input_dim=3,
         output_dim=1
-    )
+    ).to(device)
     original_controller.controller_1.load_state_dict(torch.load("pre_train_model/control_model_0.pth"))
     original_controller.controller_2.load_state_dict(torch.load("pre_train_model/control_model_1.pth"))
     original_controller.controller_3.load_state_dict(torch.load("pre_train_model/control_model_2.pth"))
@@ -422,20 +444,26 @@ def train_model(num_inverters=3, controlled_indices=None, state_dims=None, contr
         input_dim=3,
         hidden_dim=64,
         G=G
-    )
-    
+    ).to(device)
+
     # Initialize trainer
     trainer = StringStabilityTrainer(
         controller, system, V_net,
         learning_rate=learning_rate, 
-        original_controller=original_controller
+        original_controller=original_controller,
+        device=device,
+        mode=mode
     )
-    
+
     # Setup checkpointing
+    if mode == 0:
+        file_name = 'best_microgrid_model'
+    elif mode == 1:
+        file_name = 'best_microgrid_model_ISS'
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath='model_weights',
-        filename='best_microgrid_model',
+        filename=file_name,
         save_top_k=1,
         mode='min',
         save_last=False
@@ -453,7 +481,10 @@ def train_model(num_inverters=3, controlled_indices=None, state_dims=None, contr
         max_epochs=num_epochs,
         callbacks=[checkpoint_callback, early_stop_callback],
         enable_checkpointing=True,
-        check_val_every_n_epoch=1
+        check_val_every_n_epoch=1,
+        devices=1,
+        accelerator="gpu",
+        strategy=DDPStrategy(find_unused_parameters=True)
     )
     
     pl_trainer.fit(trainer, data_module)

@@ -4,7 +4,7 @@ import numpy as np
 from pre_train_model.learn_dynamics_control import DynamicsNN
 
 class GraphCouplingMatrix(nn.Module):
-    def __init__(self, N, G):
+    def __init__(self, N, G, device='cuda:0'):
         """
         A learnable coupling matrix for microgrid communication graph.
         
@@ -15,10 +15,11 @@ class GraphCouplingMatrix(nn.Module):
         super(GraphCouplingMatrix, self).__init__()
         self.N = N
         self.G = G
+        self.device = device
         # Define a learnable parameter matrix
-        self.coupling_matrix = torch.zeros(N, N)
+        self.coupling_matrix = torch.zeros(N, N).to(device)
         self.reset_parameters()
-        self.coupling_matrix = nn.Parameter(self.coupling_matrix, requires_grad=True)
+        self.coupling_matrix = nn.Parameter(self.coupling_matrix, requires_grad=True).to(device)
         
     def reset_parameters(self):
         """Initialize the coupling matrix with small values"""
@@ -37,7 +38,7 @@ class GraphCouplingMatrix(nn.Module):
             torch.Tensor: Masked and nonnegative coupling matrix.
         """
         # Apply ReLU for nonnegativity
-        A_tilde = torch.relu(self.coupling_matrix)
+        A_tilde = torch.relu(self.coupling_matrix).to(self.device)
         
         # Apply adjacency matrix mask
         A_masked = torch.clamp(A_tilde * G, 0, 2)

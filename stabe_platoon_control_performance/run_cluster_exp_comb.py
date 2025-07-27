@@ -7,6 +7,7 @@ from queries_comb import decentralized_verification
 import warnings
 import numpy as np
 warnings.filterwarnings("ignore")
+import sys
 
 # System parameters
 num_vehicles = 5
@@ -15,6 +16,8 @@ state_dims = [2] * num_vehicles
 control_dims = [1] * num_vehicles
 num_ce_list = []
 num_veri_time_list = []
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+mode = 0 # 0: sISS, 1: compositional ISS
 
 # Dynamics parameters
 dynamics_params = {
@@ -32,7 +35,7 @@ dynamics_params = {
 # Training parameters
 learning_rate = 1e-3
 batch_size = 32
-num_epochs = 50
+num_epochs = 100
 
 max_iters = 100
 
@@ -47,7 +50,7 @@ pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
 #pre_trained_critics = None
 
 # Train the model
-system_dynamics_network = system_network(state_dim=3)
+system_dynamics_network = system_network(state_dim=3).to(device)
 
 st_train_time = datetime.now()
 controllers, system, V_net = train_model(
@@ -63,14 +66,19 @@ controllers, system, V_net = train_model(
     train_system=False,
     index=index,
     pre_trained_model=pre_trained_model,
-    pre_trained_critics = pre_trained_critics
+    pre_trained_critics = pre_trained_critics,
+    device = device,
+    mode = mode
 )
 end_train_time = datetime.now()
 diff = end_train_time - st_train_time
 print("Total training time for model index", str(index), ":", str(diff.seconds))
 
+if mode == 1 or 0:
+    sys.exit()
+
 # Convert and combine models
-combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
+combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices, device)
 
 # Verification 
 st_ver_time = datetime.now()
@@ -94,12 +102,12 @@ while (len(ret) > 0) and (index < max_iters):
     controllers, system, V_net = retrain_model(num_vehicles=num_vehicles, cav_indices=cav_indices, state_dims=state_dims, 
                                                control_dims=control_dims, in_system=system, counterexamples=torch.Tensor(ret), 
                                                counterexample_ranges=ret_ranges, epoch=num_epochs, in_model= V_net, learning_rate=learning_rate,
-                                               in_controller = controllers, index = index, pre_trained_model=pre_trained_model, pre_trained_critics = pre_trained_critics, combined_model_path=cur_comb_file)
+                                               in_controller = controllers, index = index, pre_trained_model=pre_trained_model, pre_trained_critics = pre_trained_critics, combined_model_path=cur_comb_file, device = device)
     end_train_time = datetime.now()
     diff = end_train_time - st_train_time
     print("Total training time for model index", str(index), ":", str(diff.seconds))
 
-    combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices)
+    combined_model(V_net, controllers, system_dynamics_network, cur_comb_file, state_dims, cav_indices, device)
 
     st_ver_time = datetime.now()
     ret, ret_ranges, failed = decentralized_verification(

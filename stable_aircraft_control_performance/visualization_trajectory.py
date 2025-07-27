@@ -1,12 +1,15 @@
 import matplotlib.pyplot as plt
+from matplotlib.tri import Triangulation  # ✅ 正确
+#from mpl_toolkits.mplot3d import Axes3D
 import numpy as np
 import torch
-from mpl_toolkits.mplot3d import Axes3D
 import torch.nn as nn
 from networks import VectorLyapunovNetwork
 from pre_train_model.learn_dynamics_control import DynamicsNN, ControllerNN
 from networks import CombinedController
 import os
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Initialize system parameters  
 num_uavs = 3  # Total number of UAVs: 1 leader + 2 followers
@@ -40,10 +43,10 @@ for i in range(1, num_uavs):
 # Initialize system dynamics with appropriate dimensionality
 dim = 3  # 3D space
 state_dim = 2 * dim  # Position and velocity
-system_dynamics_network = DynamicsNN(state_dim=state_dim, action_dim=dim)
+system_dynamics_network = DynamicsNN(state_dim=state_dim, action_dim=dim).to(device)
 
 # Load model from checkpoint
-check_point = torch.load('model_weights/best_uav_model-v2.ckpt')
+check_point = torch.load('model_weights/best_uav_model-v45.ckpt')  #best_uav_model-v2 best_uav_model-v45 best_uav_model_mode_ISS-v1
 parameters = check_point['state_dict']
 
 # Extract controller parameters for the CombinedController
@@ -69,32 +72,32 @@ for k, v in parameters.items():
         original_controller2_params[new_key] = v
 
 # Create CombinedController
-combined_controller = CombinedController(input_dim=state_dim, output_dim=dim)
+combined_controller = CombinedController(input_dim=state_dim, output_dim=dim).to(device)
 combined_controller.controller_1.load_state_dict(controller1_params)
 combined_controller.controller_2.load_state_dict(controller2_params)
 combined_controller.eval()
 
-original_combined_controller = CombinedController(input_dim=state_dim, output_dim=dim)
+original_combined_controller = CombinedController(input_dim=state_dim, output_dim=dim).to(device)
 original_combined_controller.controller_1.load_state_dict(original_controller1_params)
 original_combined_controller.controller_2.load_state_dict(original_controller2_params)
 original_combined_controller.eval()
 
 # Initialize state
 batch_size = 1
-states = torch.zeros((batch_size, num_uavs, state_dim))
+states = torch.zeros((batch_size, num_uavs, state_dim)).to(device)
 
 # Set initial states for all UAVs
 # Leader position [0,0,0] and velocity [5,0,0]
-states[:, 0, 0:3] = torch.tensor([0.0, 0.0, 0.0])  # Leader position
-states[:, 0, 3:6] = torch.tensor([5.0, 0.0, 0.0])  # Leader velocity
+states[:, 0, 0:3] = torch.tensor([0.0, 0.0, 0.0]).to(device)  # Leader position
+states[:, 0, 3:6] = torch.tensor([5.0, 0.0, 0.0]).to(device)  # Leader velocity
 
 # First follower position behind leader, same velocity
-states[:, 1, 0:3] = torch.tensor([-10.0, 0.0, 0.0])  # First follower position
-states[:, 1, 3:6] = torch.tensor([5.0, 0.0, 0.0])    # First follower velocity
+states[:, 1, 0:3] = torch.tensor([-10.0, 0.0, 0.0]).to(device)  # First follower position
+states[:, 1, 3:6] = torch.tensor([5.0, 0.0, 0.0]).to(device)    # First follower velocity
 
 # Second follower position behind first follower, same velocity
-states[:, 2, 0:3] = torch.tensor([-20.0, 0.0, 0.0])  # Second follower position
-states[:, 2, 3:6] = torch.tensor([5.0, 0.0, 0.0])    # Second follower velocity
+states[:, 2, 0:3] = torch.tensor([-20.0, 0.0, 0.0]).to(device)  # Second follower position
+states[:, 2, 3:6] = torch.tensor([5.0, 0.0, 0.0]).to(device)    # Second follower velocity
 
 # Initialize original state
 original_states = states.clone()
@@ -102,13 +105,13 @@ original_states = states.clone()
 # Store trajectories
 time_steps = 300
 trajectories = [states.clone()]
-disturbances = torch.zeros((batch_size, num_uavs, dim))
+disturbances = torch.zeros((batch_size, num_uavs, dim)).to(device)
 original_trajectories = [original_states.clone()]
 
 # Simulate system with 3D disturbances - similar to simulate_UAVs approach
-cruise_velocity = torch.tensor([5.0, 0.0, 0.0])
-dist_amplitude = torch.tensor([3, 0.0, 0.0])  # Similar to simulate_UAVs.py torch.tensor([0.2, 0.5, 0.3]) 
-dist_frequency = torch.tensor([0.4, 0.0, 0.0])  # Match frequencies from simulate_UAVs.py torch.tensor([0.5, 0.3, 0.4])
+cruise_velocity = torch.tensor([5.0, 0.0, 0.0]).to(device)
+dist_amplitude = torch.tensor([3, 0.0, 0.0]).to(device)  # Similar to simulate_UAVs.py torch.tensor([0.2, 0.5, 0.3]) 
+dist_frequency = torch.tensor([0.4, 0.0, 0.0]).to(device)  # Match frequencies from simulate_UAVs.py torch.tensor([0.5, 0.3, 0.4])
 
 with torch.no_grad():
     for t in range(time_steps):
@@ -117,9 +120,9 @@ with torch.no_grad():
         # Extract current state
         current_state = trajectories[-1]
         original_current_state = original_trajectories[-1]
-        next_state = torch.zeros_like(current_state)
-        original_next_state = torch.zeros_like(original_current_state)
-        
+        next_state = torch.zeros_like(current_state).to(device)
+        original_next_state = torch.zeros_like(original_current_state).to(device)
+
         # Leader UAV dynamics - similar to simulate_UAVs approach
         # 1. Calculate target velocity (cruise velocity + sinusoidal disturbance)
         target_velocity = cruise_velocity.clone()
@@ -127,7 +130,7 @@ with torch.no_grad():
             target_velocity[j] += dist_amplitude[j] * torch.sin(dist_frequency[j] * time_value)
         
         # 2. Calculate target position
-        target_position = torch.zeros(dim)
+        target_position = torch.zeros(dim).to(device)
         for j in range(dim):
             # Base position from cruise velocity
             target_position[j] = cruise_velocity[j] * time_value
@@ -157,9 +160,9 @@ with torch.no_grad():
         for follower_idx in controlled_indices:
             # Rest of the follower control code remains the same
             preceding_idx = follower_idx - 1
-            p_ref = current_state[:, preceding_idx, 0:3] - dynamics_params['desired_spacing']
+            p_ref = current_state[:, preceding_idx, 0:3] - torch.tensor(dynamics_params['desired_spacing']).to(device)
             v_ref = current_state[:, preceding_idx, 3:6]
-            original_p_ref = original_current_state[:, preceding_idx, 0:3] - dynamics_params['desired_spacing']
+            original_p_ref = original_current_state[:, preceding_idx, 0:3] - torch.tensor(dynamics_params['desired_spacing']).to(device)
             original_v_ref = original_current_state[:, preceding_idx, 3:6]
             
             p_current = current_state[:, follower_idx, 0:3]
@@ -186,55 +189,56 @@ with torch.no_grad():
         original_trajectories.append(original_next_state)
 
 # Prepare data for visualization
-trajectory_array = torch.stack(trajectories).squeeze(1).numpy()
-original_trajectory_array = torch.stack(original_trajectories).squeeze(1).numpy()
+trajectory_array = torch.stack(trajectories).squeeze(1).cpu().numpy()
+original_trajectory_array = torch.stack(original_trajectories).squeeze(1).cpu().numpy()
 time_array = np.arange(time_steps + 1) * dynamics_params['dt']
 
 # Create output directory if needed
 os.makedirs('output_figures', exist_ok=True)
-
-# Plot 3D trajectory
-fig = plt.figure(figsize=(12, 10), dpi=300)
-ax = fig.add_subplot(111, projection='3d')
-
-# Plot all UAVs' trajectories with different colors
 colors = ['b', 'r', 'g']
 labels = ['Leader UAV', 'First Follower', 'Second Follower']
+try:
+    # Plot 3D trajectory
+    fig = plt.figure(figsize=(12, 10), dpi=300)
+    ax = fig.add_subplot(111, projection='3d')
 
-for i in range(num_uavs):
-    uav_traj = trajectory_array[:, i, 0:3]
-    ax.plot(uav_traj[:, 0], uav_traj[:, 1], uav_traj[:, 2], f'{colors[i]}-', linewidth=2, label=labels[i])
+    # Plot all UAVs' trajectories with different colors
 
-# Add markers at specific time points
-marker_indices = np.linspace(0, time_steps, 10, dtype=int)
-for idx in marker_indices:
-    # Get positions at this time point for all UAVs
     for i in range(num_uavs):
-        x, y, z = trajectory_array[idx, i, 0:3]
-        ax.scatter(x, y, z, c=colors[i], s=50, marker='o')
-    
-    # Add time label (only on leader for clarity)
-    time_val = idx * dynamics_params['dt']
-    lx, ly, lz = trajectory_array[idx, 0, 0:3]
-    ax.text(lx, ly, lz+0.5, f't={time_val:.1f}s', fontsize=8)
-    
-    # Connection lines between UAVs at this time
-    for i in range(1, num_uavs):
-        prev_x, prev_y, prev_z = trajectory_array[idx, i-1, 0:3]
-        curr_x, curr_y, curr_z = trajectory_array[idx, i, 0:3]
-        ax.plot([prev_x, curr_x], [prev_y, curr_y], [prev_z, curr_z], 'k--', linewidth=0.8, alpha=0.5)
+        uav_traj = trajectory_array[:, i, 0:3]
+        ax.plot(uav_traj[:, 0], uav_traj[:, 1], uav_traj[:, 2], f'{colors[i]}-', linewidth=2, label=labels[i])
 
-ax.set_xlabel('X Position (m)')
-ax.set_ylabel('Y Position (m)')
-ax.set_zlabel('Z Position (m)')
-ax.set_title('3D UAV Formation Flight Trajectory')
-ax.legend()
-ax.grid(True)
-ax.view_init(elev=30, azim=45)  # Optimize viewpoint
+    # Add markers at specific time points
+    marker_indices = np.linspace(0, time_steps, 10, dtype=int)
+    for idx in marker_indices:
+        # Get positions at this time point for all UAVs
+        for i in range(num_uavs):
+            x, y, z = trajectory_array[idx, i, 0:3]
+            ax.scatter(x, y, z, c=colors[i], s=50, marker='o')
+        
+        # Add time label (only on leader for clarity)
+        time_val = idx * dynamics_params['dt']
+        lx, ly, lz = trajectory_array[idx, 0, 0:3]
+        ax.text(lx, ly, lz+0.5, f't={time_val:.1f}s', fontsize=8)
+        
+        # Connection lines between UAVs at this time
+        for i in range(1, num_uavs):
+            prev_x, prev_y, prev_z = trajectory_array[idx, i-1, 0:3]
+            curr_x, curr_y, curr_z = trajectory_array[idx, i, 0:3]
+            ax.plot([prev_x, curr_x], [prev_y, curr_y], [prev_z, curr_z], 'k--', linewidth=0.8, alpha=0.5)
 
-plt.savefig('output_figures/uav_3d_trajectory.pdf', format='pdf', bbox_inches='tight', dpi=300)
-plt.close()
+    ax.set_xlabel('X Position (m)')
+    ax.set_ylabel('Y Position (m)')
+    ax.set_zlabel('Z Position (m)')
+    ax.set_title('3D UAV Formation Flight Trajectory')
+    ax.legend()
+    ax.grid(True)
+    ax.view_init(elev=30, azim=45)  # Optimize viewpoint
 
+    plt.savefig('output_figures/uav_3d_trajectory.pdf', format='pdf', bbox_inches='tight', dpi=300)
+    plt.close()
+except Exception as e:
+    pass
 # Plot position components over time
 fig, axs = plt.subplots(3, 1, figsize=(10, 12), dpi=300, sharex=True)
 
@@ -312,7 +316,7 @@ for k, v in parameters.items():
         V_network2_params[new_key] = v
 
 # Initialize Lyapunov network with 3 UAVs
-V_net = VectorLyapunovNetwork(input_dim=2*dim, hidden_dim=64, G=None)
+V_net = VectorLyapunovNetwork(input_dim=2*dim, hidden_dim=64, G=None).to(device)
 V_net.num_UAVs = 3
 
 # Create a coupling matrix G for visualization
@@ -370,7 +374,7 @@ for i, p_err in enumerate(x_error_space):
     for j, v_err in enumerate(vx_error_space):
         # Create a full 6D error state vector with zeros for y and z dimensions
         # Format: [px_err, py_err, pz_err, vx_err, vy_err, vz_err]
-        x = torch.tensor([p_err, 0.0, 0.0, v_err, 0.0, 0.0, p_err, 0.0, 0.0, v_err, 0.0, 0.0], dtype=torch.float32)
+        x = torch.tensor([p_err, 0.0, 0.0, v_err, 0.0, 0.0, p_err, 0.0, 0.0, v_err, 0.0, 0.0], dtype=torch.float32).to(device)
         
         # Compute Lyapunov values for each follower
         with torch.no_grad():
@@ -384,28 +388,31 @@ Z1 = V1.T  # Transpose to match meshgrid dimensions
 Z2 = V2.T  # Transpose to match meshgrid dimensions
 
 # 3D Lyapunov plot for first follower
-fig = plt.figure(figsize=(10, 8), dpi=300)
-ax = fig.add_subplot(111, projection='3d')
-surf = ax.plot_surface(X, Y, Z1, cmap='viridis', antialiased=True)
-ax.set_xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
-ax.set_ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
-ax.set_zlabel('Lyapunov Function (UAV 1)', fontsize=14, labelpad=10)
-ax.view_init(elev=30, azim=45)
-plt.tight_layout()
-plt.savefig('output_figures/uav1_lyapunov_3d.pdf', format='pdf', bbox_inches='tight', dpi=300)
-plt.close()
+try:
+    fig = plt.figure(figsize=(10, 8), dpi=300)
+    ax = fig.add_subplot(111, projection='3d')
+    surf = ax.plot_surface(X, Y, Z1, cmap='viridis', antialiased=True)
+    ax.set_xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
+    ax.set_ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
+    ax.set_zlabel('Lyapunov Function (UAV 1)', fontsize=14, labelpad=10)
+    ax.view_init(elev=30, azim=45)
+    plt.tight_layout()
+    plt.savefig('output_figures/uav1_lyapunov_3d.pdf', format='pdf', bbox_inches='tight', dpi=300)
+    plt.close()
 
-# 3D Lyapunov plot for second follower
-fig = plt.figure(figsize=(10, 8), dpi=300)
-ax = fig.add_subplot(111, projection='3d')
-surf = ax.plot_surface(X, Y, Z2, cmap='plasma', antialiased=True)
-ax.set_xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
-ax.set_ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
-ax.set_zlabel('Lyapunov Function (UAV 2)', fontsize=14, labelpad=10)
-ax.view_init(elev=30, azim=45)
-plt.tight_layout()
-plt.savefig('output_figures/uav2_lyapunov_3d.pdf', format='pdf', bbox_inches='tight', dpi=300)
-plt.close()
+    # 3D Lyapunov plot for second follower
+    fig = plt.figure(figsize=(10, 8), dpi=300)
+    ax = fig.add_subplot(111, projection='3d')
+    surf = ax.plot_surface(X, Y, Z2, cmap='plasma', antialiased=True)
+    ax.set_xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
+    ax.set_ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
+    ax.set_zlabel('Lyapunov Function (UAV 2)', fontsize=14, labelpad=10)
+    ax.view_init(elev=30, azim=45)
+    plt.tight_layout()
+    plt.savefig('output_figures/uav2_lyapunov_3d.pdf', format='pdf', bbox_inches='tight', dpi=300)
+    plt.close()
+except Exception as e:
+    pass
 
 # 2D contour plots
 # First follower individual plot

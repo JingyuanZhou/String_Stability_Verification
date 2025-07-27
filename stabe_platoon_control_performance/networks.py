@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 
 class GraphCouplingMatrix(nn.Module):
-    def __init__(self, N, G):
+    def __init__(self, N, G, device = 'cuda:0'):
         """
         A learnable coupling matrix.
         
@@ -14,9 +14,10 @@ class GraphCouplingMatrix(nn.Module):
         self.N = N
         self.G = G
         # 直接定义一个可学习的参数矩阵
-        self.coupling_matrix = torch.zeros(N, N)
+        self.coupling_matrix = torch.zeros(N, N).to(device)
         self.reset_parameters()
-        self.coupling_matrix = nn.Parameter(self.coupling_matrix, requires_grad=True)
+        self.coupling_matrix = nn.Parameter(self.coupling_matrix, requires_grad=True).to(device)
+        self.device = device
         
     def reset_parameters(self):
         """Initialize the coupling matrix with small values"""
@@ -36,7 +37,7 @@ class GraphCouplingMatrix(nn.Module):
             torch.Tensor: Masked and nonnegative coupling matrix of shape (N, N).
         """
         # Apply ReLU for nonnegativity
-        A_tilde = torch.relu(self.coupling_matrix)
+        A_tilde = torch.relu(self.coupling_matrix).to(self.device)
         
         # Apply adjacency matrix mask
         A_masked = torch.clamp(A_tilde * G, 0, 0.1)
@@ -53,7 +54,7 @@ class GraphCouplingMatrix(nn.Module):
         return A_final
 
 class VectorLyapunovNetwork(nn.Module):
-    def __init__(self, state_dim, G, hidden_dim=64):
+    def __init__(self, state_dim, G, hidden_dim=64, device = 'cuda:0'):
         super(VectorLyapunovNetwork, self).__init__()
 
         self.num_vehicles = len(state_dim)
@@ -90,20 +91,20 @@ class VectorLyapunovNetwork(nn.Module):
             nn.Linear(hidden_dim, 1)
         )
 
-        self.coupling_matrix = GraphCouplingMatrix(self.num_vehicles, G)
+        self.coupling_matrix = GraphCouplingMatrix(self.num_vehicles, G).to(device)
 
         # 创建选择矩阵
-        W1 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
-        W2 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
-        W3 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
-        W4 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
-        W_star = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False)
+        W1 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False).to(device)
+        W2 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False).to(device)
+        W3 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False).to(device)
+        W4 = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False).to(device)
+        W_star = torch.zeros(self.all_state_dim, self.one_state_dim, requires_grad=False).to(device)
         
         # 设置选择矩阵的元素
-        W1[self.one_state_dim:2*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第2辆车
-        W2[2*self.one_state_dim:3*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第3辆车
-        W3[3*self.one_state_dim:4*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第4辆车
-        W4[4*self.one_state_dim:5*self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 第5辆车
+        W1[self.one_state_dim:2*self.one_state_dim, :] = torch.eye(self.one_state_dim).to(device)  # 第2辆车
+        W2[2*self.one_state_dim:3*self.one_state_dim, :] = torch.eye(self.one_state_dim).to(device)  # 第3辆车
+        W3[3*self.one_state_dim:4*self.one_state_dim, :] = torch.eye(self.one_state_dim).to(device)  # 第4辆车
+        W4[4*self.one_state_dim:5*self.one_state_dim, :] = torch.eye(self.one_state_dim).to(device)  # 第5辆车
         W_star[0:self.one_state_dim, :] = torch.eye(self.one_state_dim)  # 参考状态
 
         self.register_buffer('W1', W1)
@@ -146,7 +147,7 @@ class VectorLyapunovNetwork(nn.Module):
     
 
 class NetworkController(nn.Module):
-    def __init__(self, state_dim, control_dim, hidden_dim=30):
+    def __init__(self, state_dim, control_dim, hidden_dim=30, device = 'cuda:0'):
         super().__init__()
         self.network = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
@@ -154,9 +155,9 @@ class NetworkController(nn.Module):
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, control_dim)
-        )
+        ).to(device)
         self.state_dim = state_dim
-        self.W_change_state_position = torch.zeros(self.state_dim, self.state_dim, requires_grad=False)
+        self.W_change_state_position = torch.zeros(self.state_dim, self.state_dim, requires_grad=False).to(device)
         #index from 0 1 2 3 4 5 6 7 8 9 to 1 3 5 7 9 0 2 4 6 8 
         self.W_change_state_position[1, 0] = 1
         self.W_change_state_position[3, 1] = 1
@@ -168,6 +169,7 @@ class NetworkController(nn.Module):
         self.W_change_state_position[4, 7] = 1
         self.W_change_state_position[6, 8] = 1
         self.W_change_state_position[8, 9] = 1
+        self.device = device
 
     def forward(self, x, x_star, u_star, u_bounds):
         """
@@ -176,7 +178,7 @@ class NetworkController(nn.Module):
         u_min, u_max = u_bounds
         x = x.reshape(-1, self.state_dim)
         x = x @ self.W_change_state_position
-        x_star = x_star.reshape(-1, self.state_dim)
+        x_star = x_star.reshape(-1, self.state_dim).to(self.device)
         x_star = x_star @ self.W_change_state_position
         #print(x)
         #print(x_star)
@@ -186,7 +188,7 @@ class NetworkController(nn.Module):
         return u
 
 class single_actor(nn.Module):
-    def __init__(self, state_dim, control_dim, hidden_dim=30):
+    def __init__(self, state_dim, control_dim, hidden_dim=30, device = 'cuda:0'):
         super().__init__()
         self.state_dim = state_dim
         self.network = nn.Sequential(
@@ -197,7 +199,7 @@ class single_actor(nn.Module):
             nn.Linear(hidden_dim, control_dim)
         )
 
-        self.W_change_state_position = torch.zeros(self.state_dim, self.state_dim, requires_grad=False)
+        self.W_change_state_position = torch.zeros(self.state_dim, self.state_dim, requires_grad=False).to(device)
         #index from 0 1 2 3 4 5 6 7 8 9 to 1 3 5 7 9 0 2 4 6 8 
         self.W_change_state_position[1, 0] = 1
         self.W_change_state_position[3, 1] = 1

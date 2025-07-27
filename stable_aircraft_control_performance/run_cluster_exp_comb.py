@@ -8,7 +8,10 @@ from queries_comb import centralized_verification, decentralized_verification
 import warnings
 import numpy as np
 warnings.filterwarnings("ignore")
+import sys 
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+mode = 0 # 0 for sISS, 1 for compositional ISS
 # System parameters
 num_UAVs = 3
 controlled_indices = [1,2] 
@@ -20,7 +23,7 @@ num_veri_time_list = []
 # Training parameters
 learning_rate = 1e-3
 batch_size = 32
-num_epochs = 30
+num_epochs = 100
 
 max_iters = 100
 
@@ -52,14 +55,19 @@ controller, system, V_net = train_model(
     learning_rate=learning_rate,
     batch_size=batch_size,
     num_epochs=num_epochs,
-    dynamics_params=dynamics_params
+    dynamics_params=dynamics_params,
+    device = device,
+    mode =mode,
 )
 end_train_time = datetime.now()
 diff = end_train_time - st_train_time
 print("Total training time for model index", str(index), ":", str(diff.seconds))
 
+if mode == 0 or mode == 1:
+    sys.exit()
+
 # Convert and combine models
-combined_model(V_net, controller, system.neural_system, cur_comb_file, state_dims, controlled_indices)
+combined_model(V_net, controller, system.neural_system, cur_comb_file, state_dims, controlled_indices, device)
 
 # Verification 
 st_ver_time = datetime.now()

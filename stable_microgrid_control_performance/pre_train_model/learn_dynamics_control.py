@@ -15,17 +15,18 @@ os.makedirs('output_figures', exist_ok=True)
 # ==================== Neural Network Models ====================
 class DynamicsNN(nn.Module):
     """Neural network for learning microgrid dynamics"""
-    def __init__(self, state_dim=3, neighbor_dim=6, control_dim=1, hidden_dim=64):
+    def __init__(self, state_dim=3, neighbor_dim=6, control_dim=1, hidden_dim=64, device='cuda:0'):
         super(DynamicsNN, self).__init__()
         self.input_dim = state_dim + neighbor_dim + control_dim  # [xi, xNi, ui]
-        
+        self.device = device
+
         self.net = nn.Sequential(
             nn.Linear(self.input_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, state_dim)
-        )
+        ).to(device)
         
     def forward(self, state, neighbor_state, control):
         # state: [batch, 3] (δ, ω, ξ)

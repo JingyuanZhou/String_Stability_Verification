@@ -6,6 +6,7 @@ import numpy as np
 from lightning.pytorch.callbacks import ModelCheckpoint, EarlyStopping
 from networks import NetworkController, VectorLyapunovNetwork, system_network, DoubleQCritic
 import torch.onnx
+from lightning.pytorch.strategies import DDPStrategy
 
 class InterconnectedSystem:
     def __init__(self, dynamics_params, connection_matrix):
@@ -170,7 +171,7 @@ class PlatoonDynamics(InterconnectedSystem):
         print("Neural dynamics training completed!")
 
 class StringStabilityTrainer(pl.LightningModule):
-    def __init__(self, V_net, controllers, system, current_index, learning_rate=1e-3, original_controller = None, critics = None):
+    def __init__(self, V_net, controllers, system, current_index, learning_rate=1e-3, original_controller = None, critics = None, mode = 0):
         super().__init__()
         self.automatic_optimization = False
         # Save networks as module attributes so they're included in checkpoints
@@ -182,6 +183,7 @@ class StringStabilityTrainer(pl.LightningModule):
         self.original_controller = original_controller
         self.critics = critics
         self.dt = 0.1
+        self.mode = mode
         
     def create_binary_adjacency_matrix(self, connections):
         """
@@ -266,31 +268,51 @@ class StringStabilityTrainer(pl.LightningModule):
         # Compute Lyapunov decrease and larger or equal to zero conditions
         V_decreases = []
         coef_cons = []
+        Loss_A_list = []
         #V_diff = torch.sum(nn.ReLU(V_current - beta))
 
         for i in range(1, states.shape[1]):  # Skip leading vehicle
-            decrease = (V_next[:,i-1] - V_current[:,i-1])
-            # Add interconnection terms based on connection matrix
+            if self.mode == 0:
+                decrease = (V_next[:,i-1] - V_current[:,i-1])
+                # Add interconnection terms based on connection matrix
 
-            decrease += coupling_matrix[i][i] * V_current[:,i-1]
-            coef_con = torch.tensor(-coupling_matrix[i][i], device=V_current.device, dtype=V_current.dtype)
-            if if_fixed_coupling:
-                for j in coupling_matrix[i]:
-                    if j >= 1:
-                        decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                decrease += coupling_matrix[i][i] * V_current[:,i-1]
+                coef_con = torch.tensor(-coupling_matrix[i][i], device=V_current.device, dtype=V_current.dtype)
+                if if_fixed_coupling:
+                    for j in coupling_matrix[i]:
+                        if j >= 1:
+                            decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                else:
+                    for j in range(1, states.shape[1]):
+                        if j != i:
+                            decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                            coef_con += coupling_matrix[i][j]
+                        #else:
+                        #    decrease += coupling_matrix[i][j] * V_current[:,j-1]
+                # Add disturbance term
+                #decrease -= torch.norm(disturbances[i])**2
+                V_decreases.append(decrease)
+                coef_cons.append(coef_con)
             else:
+                Loss_A = V_current[:,i-1]
+                max_other_V = None
                 for j in range(1, states.shape[1]):
                     if j != i:
-                        decrease -= coupling_matrix[i][j] * V_current[:,j-1]
-                        coef_con += coupling_matrix[i][j]
-                    #else:
-                    #    decrease += coupling_matrix[i][j] * V_current[:,j-1]
-            # Add disturbance term
-            #decrease -= torch.norm(disturbances[i])**2
-            V_decreases.append(decrease)
-            coef_cons.append(coef_con)
-            
-        return torch.stack(V_decreases), V_current, control_dist, torch.stack(coef_cons), value_dist, dist_ratio
+                        if max_other_V == None:
+                            max_other_V = V_current[:,j-1]
+                        else:
+                            max_other_V = torch.max(max_other_V, V_current[:,j-1])
+                Loss_A = Loss_A - 0.1*max_other_V
+
+                Loss_B = V_next[:,i-1] - V_current[:,i-1] + 0.01*V_current[:,i-1]
+
+                V_decreases.append(Loss_B)
+                Loss_A_list.append(Loss_A)
+        
+        if self.mode == 0:
+            return torch.stack(V_decreases), V_current, control_dist, torch.stack(coef_cons), value_dist, dist_ratio
+        elif self.mode == 1:
+            return torch.stack(V_decreases), torch.stack(Loss_A_list), control_dist, coef_cons, value_dist, dist_ratio
 
 
     def training_step(self, batch, batch_idx):
@@ -347,7 +369,7 @@ class StringStabilityTrainer(pl.LightningModule):
         # Add V_net parameters
         parameters.extend(self.V_net.parameters())
 
-        if self.current_index > 0:
+        if self.current_index > 0 or self.mode == 1 or self.mode == 0:
             print("add controllers parameters")
             for i in range(len(self.controllers)):
                 if self.controllers[i] is not None and hasattr(self.controllers[i], 'parameters'):
@@ -473,7 +495,7 @@ def create_platoon_connections(num_vehicles, cav_indices):
             
     return connections
 
-def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params, learning_rate, batch_size, num_epochs, system_dynamics_network=None, train_system=False, index = 0, pre_trained_model = None, pre_trained_critics = None):
+def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_params, learning_rate, batch_size, num_epochs, system_dynamics_network=None, train_system=False, index = 0, pre_trained_model = None, pre_trained_critics = None, device = None, mode = 0):
     """
     Train the platoon control system using PyTorch Lightning
     
@@ -500,15 +522,15 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
     else:
         system = PlatoonDynamics(dynamics_params, connection_matrix)
 
-    G = torch.zeros(len(system.connections), len(system.connections))
+    G = torch.zeros(len(system.connections), len(system.connections)).to(device)
     for i in system.connections:
         for j in system.connections[i]:
             G[i, j] = 1.0
 
     # Initialize networks
-    V_net = VectorLyapunovNetwork(state_dims, G)
+    V_net = VectorLyapunovNetwork(state_dims, G).to(device)
     controllers = nn.ModuleList([
-        NetworkController(sum(state_dims), control_dims[i]) if i in cav_indices 
+        NetworkController(sum(state_dims), control_dims[i]).to(device) if i in cav_indices 
         else nn.Identity() for i in range(num_vehicles)
     ])
     
@@ -533,7 +555,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
                 controllers[i].load_state_dict(corrected_state_dict)
         #controllers.load_state_dict(controller_parameters)
 
-    critics = DoubleQCritic(sum(state_dims), control_dims[1])
+    critics = DoubleQCritic(sum(state_dims), control_dims[1]).to(device)
     if pre_trained_critics is not None:
         raw_parameters_critics = torch.load(pre_trained_critics)
         critics.load_state_dict(raw_parameters_critics)
@@ -544,7 +566,7 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
 
     # Initialize trainer
     trainer = StringStabilityTrainer(V_net, controllers, system, 
-                                   learning_rate=learning_rate, current_index = index, original_controller = controllers, critics = critics)
+                                   learning_rate=learning_rate, current_index = index, original_controller = controllers, critics = critics, mode = mode)
 
     early_stopping_callback = EarlyStopping(
         monitor='val_loss',
@@ -554,10 +576,15 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
         verbose=True
     )
 
+    if mode == 1:
+        file_name = 'best_model_iss'
+    else:
+        file_name = 'best_model'
+
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath='model_weights',
-        filename='best_model',
+        filename=file_name,
         save_top_k=1,
         mode='min'
     )
@@ -567,7 +594,10 @@ def train_model(num_vehicles, cav_indices, state_dims, control_dims, dynamics_pa
         max_epochs=num_epochs,
         check_val_every_n_epoch=1,
         callbacks=[checkpoint_callback, early_stopping_callback],
-        enable_checkpointing=True
+        enable_checkpointing=True,
+        devices=1,
+        accelerator="gpu",
+        strategy=DDPStrategy(find_unused_parameters=True)
     )
     pl_trainer.fit(trainer, data_module)
 
@@ -732,7 +762,7 @@ def add_noise_to_counterexamples(counterexamples):
 def retrain_model(num_vehicles, cav_indices, state_dims, control_dims, in_system,
                  counterexamples, counterexample_ranges, epoch,
                  in_model, in_controller,
-                 learning_rate=1e-4, batch_size=32, index = 0, pre_trained_model = None, pre_trained_critics = None, combined_model_path = None):
+                 learning_rate=1e-4, batch_size=32, index = 0, pre_trained_model = None, pre_trained_critics = None, combined_model_path = None, device = None):
     """
     Retrain the platoon control system using counterexamples
     

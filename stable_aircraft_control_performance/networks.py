@@ -3,7 +3,7 @@ import torch.nn as nn
 import numpy as np
 
 class GraphCouplingMatrix(nn.Module):
-    def __init__(self, N, G):
+    def __init__(self, N, G, device = 'cuda:0'):
         """
         A learnable coupling matrix.
         
@@ -15,9 +15,10 @@ class GraphCouplingMatrix(nn.Module):
         self.N = N
         self.G = G
         # Define a learnable parameter matrix
-        self.coupling_matrix = torch.zeros(N, N)
+        self.device = device
+        self.coupling_matrix = torch.zeros(N, N).to(device)
         self.reset_parameters()
-        self.coupling_matrix = nn.Parameter(self.coupling_matrix, requires_grad=True)
+        self.coupling_matrix = nn.Parameter(self.coupling_matrix, requires_grad=True).to(device)
         
     def reset_parameters(self):
         """Initialize the coupling matrix with small values"""
@@ -36,7 +37,7 @@ class GraphCouplingMatrix(nn.Module):
             torch.Tensor: Masked and nonnegative coupling matrix.
         """
         # Apply ReLU for nonnegativity
-        A_tilde = torch.relu(self.coupling_matrix)
+        A_tilde = torch.relu(self.coupling_matrix).to(self.device)
         
         # Apply adjacency matrix mask
         A_masked = torch.clamp(A_tilde * G, 0, 2)
@@ -52,7 +53,7 @@ class GraphCouplingMatrix(nn.Module):
         return A_final
 
 class VectorLyapunovNetwork(nn.Module):
-    def __init__(self, input_dim=6, hidden_dim=96, G = None):
+    def __init__(self, input_dim=6, hidden_dim=96, G = None, device='cuda:0'):
         """
         Vector Lyapunov Function Network for UAV formation control.
         
@@ -63,7 +64,7 @@ class VectorLyapunovNetwork(nn.Module):
         super(VectorLyapunovNetwork, self).__init__()
         
         self.num_UAVs = 3
-
+        self.device = device
 
         # Network that maps error states to scalar Lyapunov values
         self.network_1 = nn.Sequential(
@@ -85,15 +86,15 @@ class VectorLyapunovNetwork(nn.Module):
         #self.equilibrium_state = torch.zeros_like(error_state)
 
         if G is not None:
-            self.coupling_matrix = GraphCouplingMatrix(self.num_UAVs, G)
+            self.coupling_matrix = GraphCouplingMatrix(self.num_UAVs, G).to(device)
 
         # matrix for UAV state selection [batch_size, n_UAVs*6] -> [batch_size, 6]
-        self.state_UAV1_matrix = torch.zeros((self.num_UAVs-1)*6, 6)
-        self.state_UAV1_matrix[:6, :] = torch.eye(6)
-        self.state_UAV2_matrix = torch.zeros((self.num_UAVs-1)*6, 6)
-        self.state_UAV2_matrix[6:12, :] = torch.eye(6)
+        self.state_UAV1_matrix = torch.zeros((self.num_UAVs-1)*6, 6).to(device)
+        self.state_UAV1_matrix[:6, :] = torch.eye(6).to(device)
+        self.state_UAV2_matrix = torch.zeros((self.num_UAVs-1)*6, 6).to(device)
+        self.state_UAV2_matrix[6:12, :] = torch.eye(6).to(device)
 
-        self.mask = torch.zeros(12,12)
+        self.mask = torch.zeros(12,12).to(device)
         self.mask[0,0] = 1
         self.mask[3,3] = 1
         self.mask[6,6] = 1
@@ -147,14 +148,15 @@ class ControllerNN(nn.Module):
         return raw_output
     
 class CombinedController(nn.Module):
-    def __init__(self, input_dim=6, output_dim=3, hidden_dim=64):
+    def __init__(self, input_dim=6, output_dim=3, hidden_dim=64, device='cuda:0'):
         super(CombinedController, self).__init__()
         self.num_UAVs = 3
-        self.controller_1 = ControllerNN(input_dim, output_dim, hidden_dim)
-        self.controller_2 = ControllerNN(input_dim, output_dim, hidden_dim)
-        self.state_UAV1_matrix = torch.zeros((self.num_UAVs-1)*6, 6)
+        self.device = device
+        self.controller_1 = ControllerNN(input_dim, output_dim, hidden_dim).to(device)
+        self.controller_2 = ControllerNN(input_dim, output_dim, hidden_dim).to(device)
+        self.state_UAV1_matrix = torch.zeros((self.num_UAVs-1)*6, 6).to(device)
         self.state_UAV1_matrix[:6, :] = torch.eye(6)
-        self.state_UAV2_matrix = torch.zeros((self.num_UAVs-1)*6, 6)
+        self.state_UAV2_matrix = torch.zeros((self.num_UAVs-1)*6, 6).to(device)
         self.state_UAV2_matrix[6:12, :] = torch.eye(6)
         
     def forward(self, error_state):

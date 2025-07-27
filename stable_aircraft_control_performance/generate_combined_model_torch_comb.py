@@ -8,12 +8,13 @@ from networks import VectorLyapunovNetwork, ControllerNN, CombinedController
 from pre_train_model.learn_dynamics_control import DynamicsNN
 
 class CombinedUAVNetwork(nn.Module):
-    def __init__(self, controller, V_net, controlled_indices, state_dims, system_dynamics):
+    def __init__(self, controller, V_net, controlled_indices, state_dims, system_dynamics, device):
         super(CombinedUAVNetwork, self).__init__()
         self.controller = controller
         self.V_net = V_net
         self.system_dynamics = system_dynamics
         self.controlled_indices = controlled_indices
+        self.device = device
         self.state_dims = state_dims
         self.num_uavs = len(state_dims)
         self.dim = state_dims[0] // 2  # Each UAV has position and velocity
@@ -172,7 +173,7 @@ class CombinedUAVNetwork(nn.Module):
             
         return current_V, next_state, next_V
 
-def combined_model(V_net, controllers, system_dynamics, output_file, state_dims, controlled_indices): 
+def combined_model(V_net, controllers, system_dynamics, output_file, state_dims, controlled_indices, device): 
     """
     Combine V_net, controllers and system dynamics into a single ONNX model for UAV formation
     
@@ -186,7 +187,7 @@ def combined_model(V_net, controllers, system_dynamics, output_file, state_dims,
     """
     
     # Create combined network
-    combined_network = CombinedUAVNetwork(controllers, V_net, controlled_indices, state_dims, system_dynamics)
+    combined_network = CombinedUAVNetwork(controllers, V_net, controlled_indices, state_dims, system_dynamics, device)
     
     # Save PyTorch model
     torch.save(combined_network, output_file.replace(".onnx", ".pth"))

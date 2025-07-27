@@ -2,7 +2,6 @@ import numpy as np
 from scipy.integrate import solve_ivp
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
-from mpl_toolkits.mplot3d import Axes3D
 from scipy import linalg
 
 # ========== 1. Controller Classes ==========

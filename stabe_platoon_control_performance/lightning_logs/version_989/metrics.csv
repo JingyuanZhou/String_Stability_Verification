@@ -1,0 +1,2 @@
+epoch,loss_control,loss_decrease,loss_positive,step,train_loss
+0,0.0,0.0016555760521441698,0.00057077850215137,49,3.8863062858581543

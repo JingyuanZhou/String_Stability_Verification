@@ -6,6 +6,8 @@ import torch.nn as nn
 from networks import NetworkController, system_network, DoubleQCritic, VectorLyapunovNetwork, system_network
 import os
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 # 初始化系统参数
 num_vehicles = 5
 cav_indices = [1]  # 第二辆车是CAV
@@ -43,11 +45,11 @@ for i in range(1, num_vehicles):
         connection_matrix[i][i-1] = 1.0
 
 # 初始化系统动力学
-system_dynamics_network = system_network(state_dim=3)
+system_dynamics_network = system_network(state_dim=3).to(device)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model-v912.ckpt') #229
+check_point = torch.load(f'model_weights/best_model_iss-v1.ckpt') #best_model-v912  best_model-v925
 parameters = check_point['state_dict']
 # 重新映射参数键名
 pre_trained_id = 95
@@ -78,7 +80,7 @@ else:
             controller_parameters[new_key] = v
 
 controllers = nn.ModuleList([
-    NetworkController(10, 1) if i in cav_indices  # state_dim=2, control_dim=1
+    NetworkController(10, 1).to(device) if i in cav_indices  # state_dim=2, control_dim=1
     else nn.Identity() for i in range(num_vehicles)
 ])
 
@@ -98,7 +100,7 @@ for k, v in raw_parameters.items():
             original_controller_parameters[new_key] = v
 
 original_controllers = nn.ModuleList([
-    NetworkController(10, 1) if i in cav_indices  # state_dim=2, control_dim=1
+    NetworkController(10, 1).to(device) if i in cav_indices  # state_dim=2, control_dim=1
     else nn.Identity() for i in range(num_vehicles)
 ])
 original_controller_parameters = {k.replace('1.', ''): v for k, v in original_controller_parameters.items()}
@@ -115,7 +117,7 @@ else:
             controllers[i].load_state_dict(controller_parameters)
 controllers.eval()
 
-critics = DoubleQCritic(10, 1)
+critics = DoubleQCritic(10, 1).to(device)
 pre_trained_critics = f"pre_train_model/sac_platoon_{pre_trained_id}_critic.pth"
 if pre_trained_critics is not None:
     raw_parameters_critics = torch.load(pre_trained_critics)
@@ -123,7 +125,7 @@ if pre_trained_critics is not None:
 
 # 初始化状态
 batch_size = 1
-states = torch.zeros((batch_size, num_vehicles, 2))
+states = torch.zeros((batch_size, num_vehicles, 2)).to(device)
 # 设置初始状态
 states[:, 0, 0] = 20  # 领头车位置
 states[:, 0, 1] = 15.0  # 领头车速度
@@ -134,9 +136,9 @@ states_original = states.clone()
 
 # 存储轨迹
 time_steps = 1000
-trajectories = [states.clone()]
-trajectories_original = [states_original.clone()]
-disturbances = torch.zeros((batch_size, num_vehicles))
+trajectories = [states.clone().to(device)]
+trajectories_original = [states_original.clone().to(device)]
+disturbances = torch.zeros((batch_size, num_vehicles)).to(device)
 
 # 模拟系统
 with torch.no_grad():
@@ -150,9 +152,9 @@ with torch.no_grad():
         controls_original = []
         for i in range(num_vehicles):
             if i in cav_indices:
-                x_star = torch.tensor([20.0, 15.0]*5)  # 期望状态
-                u_star = torch.zeros(1)
-                u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
+                x_star = torch.tensor([20.0, 15.0]*5).to(device)  # 期望状态
+                u_star = torch.zeros(1).to(device)
+                u_bounds = (torch.tensor(-5.0), torch.tensor(5.0).to(device))
 
                 control = controllers[i](states, x_star, u_star, u_bounds)
                 control_original = original_controllers[i](states_original, x_star, u_star, u_bounds)
@@ -169,8 +171,8 @@ with torch.no_grad():
         trajectories_original.append(states_original.clone())
 
 # 转换为numpy数组进行绘图
-trajectories = torch.stack(trajectories).squeeze(1).numpy()
-trajectories_original = torch.stack(trajectories_original).squeeze(1).numpy()
+trajectories = torch.stack(trajectories).squeeze(1).cpu().numpy()
+trajectories_original = torch.stack(trajectories_original).squeeze(1).cpu().numpy()
 
 # 绘制轨迹
 fig1 = plt.figure(figsize=(8, 6), dpi=300)
@@ -231,7 +233,7 @@ plt.close(fig2)
 spacing_space = np.linspace(15, 25, 100)
 velocity_space = np.linspace(10, 20, 100)
 
-G = torch.zeros(len(system.connections), len(system.connections))
+G = torch.zeros(len(system.connections), len(system.connections)).to(device)
 for i in system.connections:
     for j in system.connections[i]:
         G[i, j] = 1.0
@@ -240,7 +242,7 @@ for vehicle_idx in range(2):#num_vehicles-1
     V = np.zeros((len(spacing_space), len(velocity_space)))
 
     state_dims = [2] * num_vehicles
-    V_net = VectorLyapunovNetwork(state_dim=state_dims, G=G)
+    V_net = VectorLyapunovNetwork(state_dim=state_dims, G=G, device=device).to(device)
     V_parameters = {}
     for k, v in parameters.items():
         if k.startswith('V_net.'):
@@ -253,12 +255,12 @@ for vehicle_idx in range(2):#num_vehicles-1
     for i, s in enumerate(spacing_space):
         for j, v in enumerate(velocity_space):
             if vehicle_idx == 0:
-                x = torch.tensor([[20.0, 15.0, s, v, 20.0, 15.0, 20.0, 15.0, 20.0, 15.0]], dtype=torch.float32)
-                x_star = torch.tensor([[20.0, 15.0]*5], dtype=torch.float32)
+                x = torch.tensor([[20.0, 15.0, s, v, 20.0, 15.0, 20.0, 15.0, 20.0, 15.0]], dtype=torch.float32).to(device)
+                x_star = torch.tensor([[20.0, 15.0]*5], dtype=torch.float32).to(device)
                 V[i, j] = V_net(x, x_star)[0][0].item()
             else:
-                x = torch.tensor([[20.0, 15.0, 20.0, 15.0, s, v, 20.0, 15.0, 20.0, 15.0]], dtype=torch.float32)
-                x_star = torch.tensor([[20.0, 15.0]*5], dtype=torch.float32)
+                x = torch.tensor([[20.0, 15.0, 20.0, 15.0, s, v, 20.0, 15.0, 20.0, 15.0]], dtype=torch.float32).to(device)
+                x_star = torch.tensor([[20.0, 15.0]*5], dtype=torch.float32).to(device)
                 V[i, j] = V_net(x, x_star)[0][1].item()
 
     # Create a meshgrid: X corresponds to spacing, Y corresponds to velocity
@@ -303,11 +305,11 @@ value_origin_controller = np.zeros((len(spacing_space), len(velocity_space)))
 
 for i, s in enumerate(spacing_space):
     for j, v in enumerate(velocity_space):
-        sample_x = torch.tensor([[20.0, 15.0,s, v, 20.0, 15.0, 20.0, 15.0, 20.0, 15.0]],dtype=torch.float32)
+        sample_x = torch.tensor([[20.0, 15.0,s, v, 20.0, 15.0, 20.0, 15.0, 20.0, 15.0]],dtype=torch.float32).to(device)
 
-        x_star = torch.tensor([[20.0, 15.0]*5],dtype=torch.float32)
-        u_star = torch.zeros(1)
-        u_bounds = (torch.tensor(-5.0), torch.tensor(5.0))
+        x_star = torch.tensor([[20.0, 15.0]*5],dtype=torch.float32).to(device)
+        u_star = torch.zeros(1).to(device)
+        u_bounds = (torch.tensor(-5.0), torch.tensor(5.0).to(device))
         new_controller = controllers[1](sample_x, x_star, u_star, u_bounds)
         origin_controller = original_controllers[1](sample_x, x_star, u_star, u_bounds)
         values_new_controller[i,j] = critics(sample_x, new_controller).item()

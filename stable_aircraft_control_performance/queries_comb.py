@@ -6,7 +6,7 @@ import itertools
 # import Marabou.maraboupy import Marabou
 # from Marabou.maraboupy import MarabouCore
 import sys
-sys.path.append("/home/zhoujy53/Desktop/Marabou")
+sys.path.append("/home/jy/Marabou")
 from maraboupy import Marabou
 from maraboupy import MarabouCore, MarabouUtils
 

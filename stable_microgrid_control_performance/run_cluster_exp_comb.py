@@ -8,7 +8,11 @@ from queries_comb import decentralized_verification
 import warnings
 import numpy as np
 from networks import CombinedSystemDynamics
+import sys
 warnings.filterwarnings("ignore")
+
+mode = 0 # 0 for sISS, 1 for ISS
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # System parameters
 num_inverters = 3  # Number of inverters in the microgrid
@@ -31,7 +35,7 @@ cur_comb_file = out_comb_folders + f"combined_{index}.onnx"
 pre_trained_model = f"pre_train_model/controller_model.pth"
 pre_trained_dynamics = f"pre_train_model/dynamics_model.pth"
 
-combined_system_dynamics = CombinedSystemDynamics(state_dim=state_dims[0], neighbor_dim=state_dims[0], control_dim=control_dims[0], hidden_dim=64)
+combined_system_dynamics = CombinedSystemDynamics(state_dim=state_dims[0], neighbor_dim=state_dims[0], control_dim=control_dims[0], hidden_dim=64).to(device)
 
 # Dynamics parameters for microgrid
 dynamics_params = {
@@ -61,12 +65,16 @@ controller, system, V_net = train_model(
     learning_rate=learning_rate,
     batch_size=batch_size,
     num_epochs=num_epochs,
-    dynamics_params=dynamics_params
+    dynamics_params=dynamics_params,
+    device=device,
+    mode = mode
 )
 end_train_time = datetime.now()
 diff = end_train_time - st_train_time
 print("Total training time for model index", str(index), ":", str(diff.seconds))
 
+if mode == 0 or mode == 1:
+    sys.exit()
 # Convert and combine models
 combined_model(V_net, controller, combined_system_dynamics, cur_comb_file, state_dims, controlled_indices)
 

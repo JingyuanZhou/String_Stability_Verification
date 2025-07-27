@@ -8,7 +8,7 @@ import torch.onnx
 import matplotlib.pyplot as plt
 import os
 import torch.nn.functional as F
-
+from lightning.pytorch.strategies import DDPStrategy
 from networks import VectorLyapunovNetwork, CombinedController
 
 # Import from pre_train_model
@@ -35,7 +35,7 @@ class InterconnectedSystem:
         raise NotImplementedError("Implement system-specific dynamics")
 
 class UAVFormationDynamics(InterconnectedSystem):
-    def __init__(self, dynamics_params, connection_matrix, if_neural_network=True, neural_system=None, train_system=False):
+    def __init__(self, dynamics_params, connection_matrix, if_neural_network=True, neural_system=None, train_system=False, device='cuda:0'):
         """
         dynamics_params: {
             'dt': timestep,
@@ -66,7 +66,7 @@ class UAVFormationDynamics(InterconnectedSystem):
             # Load pre-trained neural network
             if neural_system is None:
                 # Create and load pre-trained network
-                self.neural_system = DynamicsNN(state_dim=2*self.dim, action_dim=self.dim)
+                self.neural_system = DynamicsNN(state_dim=2*self.dim, action_dim=self.dim).to(device)
                 self.neural_system.load_state_dict(torch.load("pre_train_model/dynamics_model.pth"))
                 self.neural_system.eval()
             else:
@@ -188,7 +188,7 @@ class UAVDataModule(pl.LightningDataModule):
 
 class StringStabilityTrainer(pl.LightningModule):
     def __init__(self, controller, system, V_net, learning_rate=1e-3, 
-                 current_index=None, original_controller=None):
+                 current_index=None, original_controller=None, device=None, mode=0):
         super().__init__()
         self.controller = controller
         self.system = system
@@ -203,12 +203,14 @@ class StringStabilityTrainer(pl.LightningModule):
 
         self.original_controller = original_controller
         self.automatic_optimization = False
+        self._device = device
+        self.mode = mode
         #self.save_hyperparameters(ignore=['controller', 'system', 'original_controller'])
 
     def configure_optimizers(self):
         # parameters of vector lyapunov network and controller
 
-        if self.current_index > 0:
+        if self.current_index > 0 or self.mode == 0 or self.mode == 1:
             parameters = list(self.V_net.parameters()) + list(self.controller.parameters())
         else:
             parameters = list(self.V_net.parameters()) # + list(self.controller.parameters())
@@ -292,23 +294,39 @@ class StringStabilityTrainer(pl.LightningModule):
         error_state_next = torch.cat(error_state_next, dim=-1)
 
         V_next = self.V_net(error_state_next)
-
+        Loss_A_list = []
         V_decreases = []
 
-
         for i in range(1,states.shape[1]):
-            decrease = (V_next[:,i-1] - (1-coupling_matrix[i][i])*V_current[:,i-1])
-            for j in range(1,states.shape[1]):
-                if j != i and j in self.system.connections[i]:
-                    decrease -= coupling_matrix[i][j] * V_current[:,j-1]
-            V_decreases.append(decrease)
+            if self.mode == 0:
+                decrease = (V_next[:,i-1] - (1-coupling_matrix[i][i])*V_current[:,i-1])
+                for j in range(1,states.shape[1]):
+                    if j != i and j in self.system.connections[i]:
+                        decrease -= coupling_matrix[i][j] * V_current[:,j-1]
+                V_decreases.append(decrease)
+            elif self.mode == 1:
+                Loss_A = V_current[:,i-1]
+                max_other_V = None
+                for j in range(1, states.shape[1]):
+                    if j != i:
+                        if max_other_V == None:
+                            max_other_V = V_current[:,j-1]
+                        else:
+                            max_other_V = torch.max(max_other_V, V_current[:,j-1])
+                Loss_A = Loss_A - 0.1*max_other_V
 
+                Loss_B = V_next[:,i-1] - V_current[:,i-1] + 0.01*V_current[:,i-1]
+
+                V_decreases.append(Loss_B)
+                Loss_A_list.append(Loss_A)
         control_dist = torch.tensor(0.0, device=states.device)
         control_dist += torch.norm(controls - self.original_controller(error_state), dim=1).mean()
         
-        return torch.stack(V_decreases), V_current, control_dist
+        if self.mode == 0:
+            return torch.stack(V_decreases), V_current, control_dist
+        elif self.mode == 1:
+            return torch.stack(V_decreases), torch.stack(Loss_A_list), control_dist
 
-    
     def training_step(self, batch, batch_idx):
         opts = self.optimizers()
         opts.zero_grad()
@@ -344,7 +362,7 @@ class StringStabilityTrainer(pl.LightningModule):
 
 
 def train_model(num_uavs=3, controlled_indices=None, state_dims=None, control_dims=None, 
-               dynamics_params=None, learning_rate=1e-3, batch_size=32, num_epochs=100):
+               dynamics_params=None, learning_rate=1e-3, batch_size=32, num_epochs=100, device=None, mode=0):
     """
     Train a model for UAV formation control using Vector Lyapunov Functions
     """
@@ -369,9 +387,9 @@ def train_model(num_uavs=3, controlled_indices=None, state_dims=None, control_di
             connection_matrix[i][i] = 0.01
 
     # Create system
-    system = UAVFormationDynamics(dynamics_params, connection_matrix)
+    system = UAVFormationDynamics(dynamics_params, connection_matrix, device=device)
     
-    G = torch.zeros(len(system.connections), len(system.connections))
+    G = torch.zeros(len(system.connections), len(system.connections)).to(device)
     for i in system.connections:
         for j in system.connections[i]:
             G[i, j] = 0.01
@@ -385,32 +403,38 @@ def train_model(num_uavs=3, controlled_indices=None, state_dims=None, control_di
     )
     
     # For each UAV, either load a pre-trained controller or use None
-    controller = CombinedController(input_dim=2*system.dim, output_dim=system.dim)
+    controller = CombinedController(input_dim=2*system.dim, output_dim=system.dim).to(device)
     controller.controller_1.load_state_dict(torch.load("pre_train_model/controller_model.pth"))
     controller.controller_2.load_state_dict(torch.load("pre_train_model/controller_model.pth"))
 
     # Create a copy for the original controller
-    original_controller = CombinedController(input_dim=2*system.dim, output_dim=system.dim)
+    original_controller = CombinedController(input_dim=2*system.dim, output_dim=system.dim).to(device)
     original_controller.controller_1.load_state_dict(torch.load("pre_train_model/controller_model.pth"))
     original_controller.controller_2.load_state_dict(torch.load("pre_train_model/controller_model.pth"))
 
     # Error state dimension: position error (dim) + velocity error (dim)
     error_dim = 2 * system.dim
     # Create VLF with appropriate input dimension
-    V_net = VectorLyapunovNetwork(input_dim=error_dim, hidden_dim=64, G=G)
+    V_net = VectorLyapunovNetwork(input_dim=error_dim, hidden_dim=64, G=G).to(device)
     
     # Initialize trainer with Vector Lyapunov Functions
     trainer = StringStabilityTrainer(
         controller, system, V_net,
         learning_rate=learning_rate, 
-        original_controller=original_controller
+        original_controller=original_controller,
+        device=device,
+        mode=mode
     )
     
     # Setup checkpointing
+    if mode == 0:
+        file_name = 'best_uav_model'
+    elif mode == 1:
+        file_name = 'best_uav_model_mode_ISS'
     checkpoint_callback = ModelCheckpoint(
         monitor='val_loss',
         dirpath='model_weights',
-        filename='best_uav_model',
+        filename=file_name,
         save_top_k=1,
         mode='min',
         save_last=False
@@ -429,6 +453,9 @@ def train_model(num_uavs=3, controlled_indices=None, state_dims=None, control_di
         callbacks=[checkpoint_callback, early_stop_callback],
         enable_checkpointing=True,
         check_val_every_n_epoch=1,
+        devices=1,
+        accelerator="gpu",
+        strategy=DDPStrategy(find_unused_parameters=True)
         #enable_progress_bar=True,
         #log_every_n_steps=1
     )

@@ -1,7 +1,7 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from mpl_toolkits.mplot3d import Axes3D
+#from mpl_toolkits.mplot3d import Axes3D
 import torch.nn as nn
 from networks import VectorLyapunovNetwork
 from pre_train_model.learn_dynamics_control import DynamicsNN, ControllerNN
@@ -12,7 +12,8 @@ import numpy as np
 from networks import CombinedSystemDynamics
 
 # Microgrid Lyapunov Function Analysis
-check_point = torch.load('model_weights/best_microgrid_model-v19.ckpt')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+check_point = torch.load('model_weights/best_microgrid_model-v21.ckpt') #model_weights/best_microgrid_model-v19.ckpt best_microgrid_model_ISS-v1.ckpt
 parameters = check_point['state_dict']
 
 # Extract controller parameters for the CombinedController
@@ -59,13 +60,13 @@ for i in range(num_inverters):
         G[i, i+1] = G[i+1, i] = 0.01
 
 # Create CombinedController
-combined_controller = CombinedController(input_dim=state_dim)
+combined_controller = CombinedController(input_dim=state_dim).to(device)
 combined_controller.controller_1.load_state_dict(controller1_params)
 combined_controller.controller_2.load_state_dict(controller2_params)
 combined_controller.controller_3.load_state_dict(controller3_params)
 combined_controller.eval()
 
-original_combined_controller = CombinedController(input_dim=state_dim)
+original_combined_controller = CombinedController(input_dim=state_dim).to(device)
 original_combined_controller.controller_1.load_state_dict(original_controller1_params)
 original_combined_controller.controller_2.load_state_dict(original_controller2_params)
 original_combined_controller.controller_3.load_state_dict(original_controller3_params)
@@ -93,7 +94,7 @@ for k, v in parameters.items():
         V_network3_params[new_key] = v
 
 # Initialize Lyapunov network with 3 UAVs
-V_net = VectorLyapunovNetwork(hidden_dim=64, G=None)
+V_net = VectorLyapunovNetwork(hidden_dim=64, G=None).to(device)
 V_net.network_1.load_state_dict(V_network1_params)
 V_net.network_2.load_state_dict(V_network2_params)
 V_net.network_3.load_state_dict(V_network3_params)
@@ -119,9 +120,9 @@ for i, omega in enumerate(omega_range):
         for k in range(num_inverters):
 
             if k == 1:
-                state = torch.zeros(1, state_dim + 2)
+                state = torch.zeros(1, state_dim + 2).to(device)
             else:
-                state = torch.zeros(1, state_dim)
+                state = torch.zeros(1, state_dim).to(device)
 
             if k == 0 or k == 2:
                 state[0, 0] = delta     # delta error
@@ -134,7 +135,7 @@ for i, omega in enumerate(omega_range):
                 state[0, 3] = 0
                 state[0, 4] = xi_fixed  # xi (fixed)
 
-            equilibrium_state = torch.zeros_like(state)
+            equilibrium_state = torch.zeros_like(state).to(device)
             if k == 0:
                 lyapunov_value = V_net.network_1(state) - V_net.network_1(equilibrium_state) + 0.001    
             elif k == 1:
@@ -148,25 +149,28 @@ for i, omega in enumerate(omega_range):
         v_values[1, i, j] = lyapunov_values[1].item()
         v_values[2, i, j] = lyapunov_values[2].item()
 
-# Create separate 3D visualizations for each inverter's Lyapunov function
-for inv_idx in range(num_inverters):
-    fig = plt.figure(figsize=(10, 8))
-    ax = fig.add_subplot(111, projection='3d')
-    surf = ax.plot_surface(omega_mesh, delta_mesh, v_values[inv_idx].T, 
-                          cmap=cm.viridis, alpha=0.8, antialiased=True)
-    
-    # Add labels and title
-    ax.set_xlabel('Frequency Error (rad/s)')
-    ax.set_ylabel('Delta Error (rad)')
-    ax.set_zlabel('Lyapunov Value')
-    ax.set_title(f'Inverter {inv_idx+1} Lyapunov Function')
-    
-    # Add a color bar
-    fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
+try:
+    # Create separate 3D visualizations for each inverter's Lyapunov function
+    for inv_idx in range(num_inverters):
+        fig = plt.figure(figsize=(10, 8))
+        ax = fig.add_subplot(111, projection='3d')
+        surf = ax.plot_surface(omega_mesh, delta_mesh, v_values[inv_idx].T, 
+                            cmap=cm.viridis, alpha=0.8, antialiased=True)
+        
+        # Add labels and title
+        ax.set_xlabel('Frequency Error (rad/s)')
+        ax.set_ylabel('Delta Error (rad)')
+        ax.set_zlabel('Lyapunov Value')
+        ax.set_title(f'Inverter {inv_idx+1} Lyapunov Function')
+        
+        # Add a color bar
+        fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
 
-    plt.tight_layout()
-    plt.savefig(f'output_figures/microgrid_lyapunov_function_inverter{inv_idx+1}_3d.png', dpi=300)
-    plt.close(fig)
+        plt.tight_layout()
+        plt.savefig(f'output_figures/microgrid_lyapunov_function_inverter{inv_idx+1}_3d.png', dpi=300)
+        plt.close(fig)
+except Exception as e:
+    pass
 
 # Create separate 2D contour plots for each inverter
 for inv_idx in range(num_inverters):
@@ -203,7 +207,7 @@ def monte_carlo_single_step(controller, original_controller, num_runs=2000, dt=0
         Dictionary with statistics from the Monte Carlo runs
     """
     # Load dynamics models
-    dynamics = CombinedSystemDynamics(state_dim=3, neighbor_dim=3, control_dim=1)
+    dynamics = CombinedSystemDynamics(state_dim=3, neighbor_dim=3, control_dim=1).to(device)
     dynamics_models = [dynamics.dynamics_1, dynamics.dynamics_2, dynamics.dynamics_3]
     dynamics_models[0].load_state_dict(torch.load("pre_train_model/dynamics_model_0.pth"))
     dynamics_models[1].load_state_dict(torch.load("pre_train_model/dynamics_model_1.pth"))
@@ -222,7 +226,7 @@ def monte_carlo_single_step(controller, original_controller, num_runs=2000, dt=0
     
     # Nominal frequency
     omega_star = 2 * np.pi * 50
-    equilibrium_state = torch.tensor([[0.0, omega_star, 0.0]])
+    equilibrium_state = torch.tensor([[0.0, omega_star, 0.0]]).to(device)  # Equilibrium state for each inverter
 
     
     # Run multiple single-step evaluations
@@ -231,6 +235,7 @@ def monte_carlo_single_step(controller, original_controller, num_runs=2000, dt=0
             print(f"Running Monte Carlo evaluation {run+1}/{num_runs}")
         
         # Generate random initial conditions
+        np.random.seed(run)  # For reproducibility
         initial_states = []
         for i in range(3):  # Three inverters
             # Random perturbation with global + local components
@@ -239,7 +244,7 @@ def monte_carlo_single_step(controller, original_controller, num_runs=2000, dt=0
             xi_perturb = 0
             
             # Create initial state with perturbation
-            initial_state = torch.tensor([[delta_perturb, omega_perturb, xi_perturb]])
+            initial_state = torch.tensor([[delta_perturb, omega_perturb, xi_perturb]]).to(device)
             
             initial_states.append(initial_state)
         
@@ -271,9 +276,9 @@ def monte_carlo_single_step(controller, original_controller, num_runs=2000, dt=0
                     state_i = initial_states[i] + equilibrium_state
                     neighbor_state = initial_states[i-1] + equilibrium_state
                     next_state = dynamics_models[2](state_i, neighbor_state, u)
-                
-                optimized_next_states.append(next_state.detach().numpy())
-        
+
+                optimized_next_states.append(next_state.detach().cpu().numpy())
+
         # Take one step with original controller
         original_next_states = []
         for i in range(len(initial_states)):
@@ -303,7 +308,7 @@ def monte_carlo_single_step(controller, original_controller, num_runs=2000, dt=0
                     neighbor_state = initial_states[i-1] + equilibrium_state
                     next_state = dynamics_models[2](state_i, neighbor_state, u)
                 
-                original_next_states.append(next_state.detach().numpy())
+                original_next_states.append(next_state.detach().cpu().numpy())
         
         # Calculate errors after one step (norm of state)
         optimized_error = 0

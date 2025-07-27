@@ -6,7 +6,7 @@ import itertools
 # import Marabou.maraboupy import Marabou
 # from Marabou.maraboupy import MarabouCore
 import sys
-sys.path.append("/home/zhoujy53/Desktop/Marabou")
+sys.path.append("/home/jy/Marabou")
 from maraboupy import Marabou
 from maraboupy import MarabouCore, MarabouUtils
 
@@ -99,7 +99,12 @@ class DecentralizedVerificationQuery:
         disjunction.append([ineq2])
         
         network.addDisjunctionConstraint(disjunction)
-        exitCode, vals, stats = network.solve(options=options, verbose=False)
+        try:
+            exitCode, vals, stats = network.solve(options=options, verbose=False)
+        except Exception as e:
+            print(">>> ERROR during Marabou solve:", e)
+
+        #exitCode, vals, stats = network.solve(options=options, verbose=False)
 
         if exitCode == "sat":
             # Found counterexample - return states of all agents
