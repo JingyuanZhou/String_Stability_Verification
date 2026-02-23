@@ -30,12 +30,12 @@ dynamics_params = {
 #plt.style.use('seaborn-white')  # 使用清爽的背景样式
 
 plt.rcParams["font.family"] = "Times New Roman"
-plt.rcParams['font.size'] = 18  # 设置默认字体大小
-plt.rcParams['axes.labelsize'] = 20  # 坐标轴标签字体大小
-plt.rcParams['axes.titlesize'] = 20  # 标题字体大小
-plt.rcParams['xtick.labelsize'] = 18  # x轴刻度字体大小
-plt.rcParams['ytick.labelsize'] = 18  # y轴刻度字体大小
-plt.rcParams['legend.fontsize'] = 18  # 图例字体大小
+plt.rcParams['font.size'] = 24  # 设置默认字体大小
+plt.rcParams['axes.labelsize'] = 24  # 坐标轴标签字体大小
+plt.rcParams['axes.titlesize'] = 24  # 标题字体大小
+plt.rcParams['xtick.labelsize'] = 24  # x轴刻度字体大小
+plt.rcParams['ytick.labelsize'] = 24  # y轴刻度字体大小
+plt.rcParams['legend.fontsize'] = 24  # 图例字体大小
 
 
 
@@ -343,15 +343,15 @@ for vehicle_idx in range(2):#num_vehicles-1
         fig2 = plt.figure(figsize=(8, 6), dpi=300)
         ax = fig2.add_subplot(111, projection='3d')
         surf = ax.plot_surface(X, Y, Z, cmap='viridis', antialiased=True)
-        ax.set_xlabel('Spacing (m)', fontsize=16, labelpad=10)
-        ax.set_ylabel('Velocity (m/s)', fontsize=16, labelpad=10)
-        ax.set_zlabel('Lyapunov Function', fontsize=16, labelpad=10)
-        ax.tick_params(axis='x', labelsize=14)
-        ax.tick_params(axis='y', labelsize=14)
-        ax.tick_params(axis='z', labelsize=14)
+        ax.set_xlabel('Spacing (m)', fontsize=24, labelpad=10)
+        ax.set_ylabel('Velocity (m/s)', fontsize=24, labelpad=10)
+        ax.set_zlabel('Lyapunov Function', fontsize=24, labelpad=10)
+        ax.tick_params(axis='x', labelsize=24)
+        ax.tick_params(axis='y', labelsize=24)
+        ax.tick_params(axis='z', labelsize=24)
         cbar_3d = fig2.colorbar(surf, ax=ax, shrink=0.6, format=mtick.FormatStrFormatter('%.2e'))
-        cbar_3d.ax.tick_params(labelsize=14)
-        cbar_3d.set_label('Lyapunov Function', fontsize=16)
+        cbar_3d.ax.tick_params(labelsize=24)
+        cbar_3d.set_label('Lyapunov Function', fontsize=24)
         ax.view_init(elev=30, azim=45)  # 优化视角
         plt.tight_layout()
         if vehicle_idx == 0:
@@ -366,12 +366,12 @@ for vehicle_idx in range(2):#num_vehicles-1
     fig3, ax = plt.subplots(figsize=(8, 6), dpi=300)
     contour = ax.contourf(X, Y, Z, cmap='viridis', levels=20, alpha=0.95)
     ax.plot(20, 15, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-    ax.set_xlabel('Spacing (m)', fontsize=16, labelpad=10)
-    ax.set_ylabel('Velocity (m/s)', fontsize=16, labelpad=10)
-    ax.tick_params(axis='both', labelsize=14)
-    cbar = plt.colorbar(contour, ax=ax, format=mtick.FormatStrFormatter('%.2e'))
-    cbar.ax.tick_params(labelsize=14)
-    cbar.set_label('Lyapunov Function', fontsize=16)
+    ax.set_xlabel('Spacing (m)', fontsize=24, labelpad=10)
+    ax.set_ylabel('Velocity (m/s)', fontsize=24, labelpad=10)
+    ax.tick_params(axis='both', labelsize=24)
+    cbar = plt.colorbar(contour, ax=ax, format=mtick.FormatStrFormatter('%.1e'))
+    cbar.ax.tick_params(labelsize=20)
+    cbar.set_label('Lyapunov Function', fontsize=24)
     plt.legend(fontsize=14, frameon=True, fancybox=True, framealpha=0.8)
     plt.tight_layout()
     
