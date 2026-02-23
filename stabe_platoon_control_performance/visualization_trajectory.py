@@ -1,10 +1,13 @@
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mtick
 import numpy as np
 import torch
 from training_exp_comb import PlatoonDynamics
 import torch.nn as nn
 from networks import NetworkController, system_network, DoubleQCritic, VectorLyapunovNetwork, system_network
+from model_based_control import LinearFeedbackController, MPCController
 import os
+from matplotlib import font_manager as fm
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -27,12 +30,12 @@ dynamics_params = {
 #plt.style.use('seaborn-white')  # 使用清爽的背景样式
 
 plt.rcParams["font.family"] = "Times New Roman"
-plt.rcParams['font.size'] = 12  # 设置默认字体大小
-plt.rcParams['axes.labelsize'] = 14  # 坐标轴标签字体大小
-plt.rcParams['axes.titlesize'] = 16  # 标题字体大小
-plt.rcParams['xtick.labelsize'] = 12  # x轴刻度字体大小
-plt.rcParams['ytick.labelsize'] = 12  # y轴刻度字体大小
-plt.rcParams['legend.fontsize'] = 12  # 图例字体大小
+plt.rcParams['font.size'] = 18  # 设置默认字体大小
+plt.rcParams['axes.labelsize'] = 20  # 坐标轴标签字体大小
+plt.rcParams['axes.titlesize'] = 20  # 标题字体大小
+plt.rcParams['xtick.labelsize'] = 18  # x轴刻度字体大小
+plt.rcParams['ytick.labelsize'] = 18  # y轴刻度字体大小
+plt.rcParams['legend.fontsize'] = 18  # 图例字体大小
 
 
 
@@ -49,7 +52,7 @@ system_dynamics_network = system_network(state_dim=3).to(device)
 system = PlatoonDynamics(dynamics_params, connection_matrix, True, system_dynamics_network)
 
 # 加载参数并分离控制器参数
-check_point = torch.load(f'model_weights/best_model_iss-v1.ckpt') #best_model-v912  best_model-v925
+check_point = torch.load(f'model_weights/best_model_iss-v1.ckpt') #best_model-v912/925   best_model_iss-v1.ckpt
 parameters = check_point['state_dict']
 # 重新映射参数键名
 pre_trained_id = 95
@@ -106,6 +109,18 @@ original_controllers = nn.ModuleList([
 original_controller_parameters = {k.replace('1.', ''): v for k, v in original_controller_parameters.items()}
 original_controllers[1].load_state_dict(original_controller_parameters)
 
+# 模型基控制器：LCC（线性反馈）与 MPC
+model_based_controllers = nn.ModuleList([
+    LinearFeedbackController(10, 1, k_ego_spacing=0.5, k_ego_velocity=1.0, k_following_spacing=0.1, k_following_velocity=0.2, device=device) if i in cav_indices
+    else nn.Identity() for i in range(num_vehicles)
+])
+model_based_controllers.eval()
+
+mpc_controllers = nn.ModuleList([
+    MPCController(10, 1, dt=dynamics_params['dt'], horizon=10, Q_spacing=1.0, Q_velocity=1.0, R_control=0.1, device=device) if i in cav_indices
+    else nn.Identity() for i in range(num_vehicles)
+])
+mpc_controllers.eval()
 
 #print("controller_parameters", controller_parameters)
 #print("controllers", controllers)
@@ -138,18 +153,24 @@ states_original = states.clone()
 time_steps = 1000
 trajectories = [states.clone().to(device)]
 trajectories_original = [states_original.clone().to(device)]
+states_model_based = states.clone()
+trajectories_model_based = [states_model_based.clone().to(device)]
+states_mpc = states.clone()
+trajectories_mpc = [states_mpc.clone().to(device)]
 disturbances = torch.zeros((batch_size, num_vehicles)).to(device)
 
 # 模拟系统
 with torch.no_grad():
     for t in range(time_steps):
         # 为领头车添加正弦扰动
-        if t<=100:
-            disturbances[:, 0] = 2.0 * torch.sin(torch.tensor(2 * np.pi * t / 50))  # 振幅2.0，周期50步
-        
+        if t<=500:
+            disturbances[:, 0] = 7 * torch.sin(torch.tensor(2 * np.pi * t / 70))  # 振幅4.0，周期30步
+
         # 计算控制输入
         controls = []
         controls_original = []
+        controls_model_based = []
+        controls_mpc = []
         for i in range(num_vehicles):
             if i in cav_indices:
                 x_star = torch.tensor([20.0, 15.0]*5).to(device)  # 期望状态
@@ -158,21 +179,33 @@ with torch.no_grad():
 
                 control = controllers[i](states, x_star, u_star, u_bounds)
                 control_original = original_controllers[i](states_original, x_star, u_star, u_bounds)
-                controls.append(control)#
+                control_model_based = model_based_controllers[i](states_model_based, x_star, u_star, u_bounds)
+                control_mpc = mpc_controllers[i](states_mpc, x_star, u_star, u_bounds)
+                controls.append(control)
                 controls_original.append(control_original)
+                controls_model_based.append(control_model_based)
+                controls_mpc.append(control_mpc)
             else:
                 controls.append(None)
                 controls_original.append(None)
+                controls_model_based.append(None)
+                controls_mpc.append(None)
         
         # 更新状态
         states = system.next_state(states, controls, disturbances)
         states_original = system.next_state(states_original, controls_original, disturbances)
+        states_model_based = system.next_state(states_model_based, controls_model_based, disturbances)
+        states_mpc = system.next_state(states_mpc, controls_mpc, disturbances)
         trajectories.append(states.clone())
         trajectories_original.append(states_original.clone())
+        trajectories_model_based.append(states_model_based.clone())
+        trajectories_mpc.append(states_mpc.clone())
 
 # 转换为numpy数组进行绘图
 trajectories = torch.stack(trajectories).squeeze(1).cpu().numpy()
 trajectories_original = torch.stack(trajectories_original).squeeze(1).cpu().numpy()
+trajectories_model_based = torch.stack(trajectories_model_based).squeeze(1).cpu().numpy()
+trajectories_mpc = torch.stack(trajectories_mpc).squeeze(1).cpu().numpy()
 
 # 绘制轨迹
 fig1 = plt.figure(figsize=(8, 6), dpi=300)
@@ -185,18 +218,16 @@ for i in range(num_vehicles):
     
     plt.subplot(2, 1, 1)
     plt.plot(spacing, label=labels[i], color=colors[i])
-    plt.ylabel('Spacing (m)', fontsize=14)
-    # Increase grid clarity
+    plt.ylabel('Spacing (m)', fontsize=16)
     plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
-    plt.legend(fontsize=12)
+    plt.legend(fontsize=14)
     
     plt.subplot(2, 1, 2)
     plt.plot(velocities, label=labels[i], color=colors[i])
-    plt.ylabel('Velocity (m/s)', fontsize=14)
-    plt.xlabel('Time Steps', fontsize=14)
-    # Increase grid clarity
+    plt.ylabel('Velocity (m/s)', fontsize=16)
+    plt.xlabel('Time Steps', fontsize=16)
     plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
-    plt.legend(fontsize=12)
+    plt.legend(fontsize=14)
 
 plt.tight_layout()
 fig1.savefig('output_figures/trajectory.pdf', format='pdf', bbox_inches='tight', dpi=300)
@@ -212,22 +243,60 @@ for i in range(num_vehicles):
     
     plt.subplot(2, 1, 1)
     plt.plot(spacing, label=labels[i], color=colors[i])
-    plt.ylabel('Spacing (m)', fontsize=14)
-    # Increase grid clarity
+    plt.ylabel('Spacing (m)', fontsize=16)
     plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
-    plt.legend(fontsize=12)
+    plt.legend(fontsize=14)
     
     plt.subplot(2, 1, 2)
     plt.plot(velocities, label=labels[i], color=colors[i])
-    plt.ylabel('Velocity (m/s)', fontsize=14)
-    plt.xlabel('Time Steps', fontsize=14)
-    # Increase grid clarity
+    plt.ylabel('Velocity (m/s)', fontsize=16)
+    plt.xlabel('Time Steps', fontsize=16)
     plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
-    plt.legend(fontsize=12)
+    plt.legend(fontsize=14)
 
 plt.tight_layout()
 fig2.savefig('output_figures/trajectory_original.pdf', format='pdf', bbox_inches='tight', dpi=300)
 plt.close(fig2)
+
+# 线性反馈模型控制器轨迹
+fig_mb = plt.figure(figsize=(8, 6), dpi=300)
+for i in range(num_vehicles):
+    spacing = trajectories_model_based[:, i, 0]
+    velocities = trajectories_model_based[:, i, 1]
+    plt.subplot(2, 1, 1)
+    plt.plot(spacing, label=labels[i], color=colors[i])
+    plt.ylabel('Spacing (m)', fontsize=16)
+    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    plt.legend(fontsize=14)
+    plt.subplot(2, 1, 2)
+    plt.plot(velocities, label=labels[i], color=colors[i])
+    plt.ylabel('Velocity (m/s)', fontsize=16)
+    plt.xlabel('Time Steps', fontsize=16)
+    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    plt.legend(fontsize=14)
+plt.tight_layout()
+fig_mb.savefig('output_figures/trajectory_model_based.pdf', format='pdf', bbox_inches='tight', dpi=300)
+plt.close(fig_mb)
+
+# MPC 控制器轨迹
+fig_mpc = plt.figure(figsize=(8, 6), dpi=300)
+for i in range(num_vehicles):
+    spacing = trajectories_mpc[:, i, 0]
+    velocities = trajectories_mpc[:, i, 1]
+    plt.subplot(2, 1, 1)
+    plt.plot(spacing, label=labels[i], color=colors[i])
+    plt.ylabel('Spacing (m)', fontsize=16)
+    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    plt.legend(fontsize=14)
+    plt.subplot(2, 1, 2)
+    plt.plot(velocities, label=labels[i], color=colors[i])
+    plt.ylabel('Velocity (m/s)', fontsize=16)
+    plt.xlabel('Time Steps', fontsize=16)
+    plt.grid(True, linestyle="--", linewidth=0.5, alpha=0.7)
+    plt.legend(fontsize=14)
+plt.tight_layout()
+fig_mpc.savefig('output_figures/trajectory_mpc.pdf', format='pdf', bbox_inches='tight', dpi=300)
+plt.close(fig_mpc)
 
 # visualize lyapunov functions
 spacing_space = np.linspace(15, 25, 100)
@@ -270,28 +339,40 @@ for vehicle_idx in range(2):#num_vehicles-1
     Z = V.T
 
     # 3D Lyapunov图
-    fig2 = plt.figure(figsize=(8, 6), dpi=300)
-    ax = fig2.add_subplot(111, projection='3d')
-    surf = ax.plot_surface(X, Y, Z, cmap='viridis', antialiased=True)
-    ax.set_xlabel('Spacing (m)', fontsize=14, labelpad=10)
-    ax.set_ylabel('Velocity (m/s)', fontsize=14, labelpad=10)
-    ax.set_zlabel('Lyapunov Function', fontsize=14, labelpad=10)
-    ax.view_init(elev=30, azim=45)  # 优化视角
-    plt.tight_layout()
-    if vehicle_idx == 0:
-        fig2.savefig('output_figures/lyapunov_3d_CAV.pdf', format='pdf', bbox_inches='tight', dpi=300)
-    else:
-        fig2.savefig('output_figures/lyapunov_3d_HDV.pdf', format='pdf', bbox_inches='tight', dpi=300)
-    plt.close(fig2)
+    try:
+        fig2 = plt.figure(figsize=(8, 6), dpi=300)
+        ax = fig2.add_subplot(111, projection='3d')
+        surf = ax.plot_surface(X, Y, Z, cmap='viridis', antialiased=True)
+        ax.set_xlabel('Spacing (m)', fontsize=16, labelpad=10)
+        ax.set_ylabel('Velocity (m/s)', fontsize=16, labelpad=10)
+        ax.set_zlabel('Lyapunov Function', fontsize=16, labelpad=10)
+        ax.tick_params(axis='x', labelsize=14)
+        ax.tick_params(axis='y', labelsize=14)
+        ax.tick_params(axis='z', labelsize=14)
+        cbar_3d = fig2.colorbar(surf, ax=ax, shrink=0.6, format=mtick.FormatStrFormatter('%.2e'))
+        cbar_3d.ax.tick_params(labelsize=14)
+        cbar_3d.set_label('Lyapunov Function', fontsize=16)
+        ax.view_init(elev=30, azim=45)  # 优化视角
+        plt.tight_layout()
+        if vehicle_idx == 0:
+            fig2.savefig('output_figures/lyapunov_3d_CAV.pdf', format='pdf', bbox_inches='tight', dpi=300)
+        else:
+            fig2.savefig('output_figures/lyapunov_3d_HDV.pdf', format='pdf', bbox_inches='tight', dpi=300)
+        plt.close(fig2)
+    except Exception as e:
+        pass
 
     # 2D等高线图
     fig3, ax = plt.subplots(figsize=(8, 6), dpi=300)
     contour = ax.contourf(X, Y, Z, cmap='viridis', levels=20, alpha=0.95)
     ax.plot(20, 15, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-    ax.set_xlabel('Spacing (m)', fontsize=14, labelpad=10)
-    ax.set_ylabel('Velocity (m/s)', fontsize=14, labelpad=10)
-    plt.colorbar(contour)  # 添加颜色条
-    plt.legend(fontsize=12, frameon=True, fancybox=True, framealpha=0.8)
+    ax.set_xlabel('Spacing (m)', fontsize=16, labelpad=10)
+    ax.set_ylabel('Velocity (m/s)', fontsize=16, labelpad=10)
+    ax.tick_params(axis='both', labelsize=14)
+    cbar = plt.colorbar(contour, ax=ax, format=mtick.FormatStrFormatter('%.2e'))
+    cbar.ax.tick_params(labelsize=14)
+    cbar.set_label('Lyapunov Function', fontsize=16)
+    plt.legend(fontsize=14, frameon=True, fancybox=True, framealpha=0.8)
     plt.tight_layout()
     
     if vehicle_idx == 0:
@@ -319,103 +400,173 @@ for i, s in enumerate(spacing_space):
 X, Y = np.meshgrid(spacing_space, velocity_space)
 
 # Q-value差值图
-fig4 = plt.figure(figsize=(8, 6), dpi=300)
-ax = fig4.add_subplot(111, projection='3d')
-surf_1 = ax.plot_surface(X, Y, values_new_controller-value_origin_controller, 
-                        cmap='viridis', antialiased=True)
-ax.set_xlabel('Spacing (m)', fontsize=14, labelpad=10)
-ax.set_ylabel('Velocity (m/s)', fontsize=14, labelpad=10)
-ax.set_zlabel('Q-value difference', fontsize=14, labelpad=10)
-ax.view_init(elev=30, azim=45)  # 优化视角
-plt.tight_layout()
-fig4.savefig('output_figures/q_value_difference_3d.pdf', format='pdf', bbox_inches='tight', dpi=300)
-plt.close(fig4)
+try:
+    fig4 = plt.figure(figsize=(8, 6), dpi=300)
+    ax = fig4.add_subplot(111, projection='3d')
+    surf_1 = ax.plot_surface(X, Y, values_new_controller-value_origin_controller, 
+                            cmap='viridis', antialiased=True)
+    ax.set_xlabel('Spacing (m)', fontsize=16, labelpad=10)
+    ax.set_ylabel('Velocity (m/s)', fontsize=16, labelpad=10)
+    ax.set_zlabel('Q-value difference', fontsize=16, labelpad=10)
+    ax.tick_params(axis='x', labelsize=14)
+    ax.tick_params(axis='y', labelsize=14)
+    ax.tick_params(axis='z', labelsize=14)
+    ax.view_init(elev=30, azim=45)  # 优化视角
+    plt.tight_layout()
+    fig4.savefig('output_figures/q_value_difference_3d.pdf', format='pdf', bbox_inches='tight', dpi=300)
+    plt.close(fig4)
+except Exception as e:
+    pass
 
 # 新增：Q-value差值的等高线图
 fig5, ax = plt.subplots(figsize=(8, 6), dpi=300)
 contour = ax.contourf(X, Y, values_new_controller-value_origin_controller, 
                      cmap='viridis', levels=20, alpha=0.95)
 ax.plot(20, 15, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-ax.set_xlabel('Spacing (m)', fontsize=14, labelpad=10)
-ax.set_ylabel('Velocity (m/s)', fontsize=14, labelpad=10)
-plt.colorbar(contour)  # 添加颜色条
-plt.legend(fontsize=12, frameon=True, fancybox=True, framealpha=0.8)
+ax.set_xlabel('Spacing (m)', fontsize=16, labelpad=10)
+ax.set_ylabel('Velocity (m/s)', fontsize=16, labelpad=10)
+ax.tick_params(axis='both', labelsize=14)
+cbar_q = plt.colorbar(contour, ax=ax, format=mtick.FormatStrFormatter('%.2e'))
+cbar_q.ax.tick_params(labelsize=14)
+cbar_q.set_label('Q-value difference', fontsize=16)
+plt.legend(fontsize=14, frameon=True, fancybox=True, framealpha=0.8)
 plt.tight_layout()
 fig5.savefig('output_figures/q_value_difference_contour.pdf', format='pdf', bbox_inches='tight', dpi=300)
 plt.close(fig5)
 
 print(np.sum(np.abs(trajectories_original[:,1,0]-trajectories[:,1,0])))
 
-# calculate tracking error for the CAV (original controller and new controller)
+# calculate tracking error for the CAV (all controllers)
 # Calculate velocity tracking errors relative to the leading vehicle
 leading_vel = trajectories[:, 0, 1]  # Leading vehicle velocity
 cav_vel_new = trajectories[:, 1, 1]  # CAV velocity with new controller
 cav_vel_original = trajectories_original[:, 1, 1]  # CAV velocity with original controller
+cav_vel_model_based = trajectories_model_based[:, 1, 1]  # CAV velocity with LCC
+cav_vel_mpc = trajectories_mpc[:, 1, 1]  # CAV velocity with MPC
 
 # Calculate velocity errors relative to the leading vehicle
 velocity_error_new = cav_vel_new - leading_vel
 velocity_error_original = cav_vel_original - leading_vel
+velocity_error_model_based = cav_vel_model_based - leading_vel
+velocity_error_mpc = cav_vel_mpc - leading_vel
 
 # Calculate error statistics
 mean_error_new = np.mean(np.abs(velocity_error_new))
 mean_error_original = np.mean(np.abs(velocity_error_original))
+mean_error_model_based = np.mean(np.abs(velocity_error_model_based))
+mean_error_mpc = np.mean(np.abs(velocity_error_mpc))
 max_error_new = np.max(np.abs(velocity_error_new))
 max_error_original = np.max(np.abs(velocity_error_original))
+max_error_model_based = np.max(np.abs(velocity_error_model_based))
+max_error_mpc = np.max(np.abs(velocity_error_mpc))
 rmse_new = np.sqrt(np.mean(velocity_error_new**2))
 rmse_original = np.sqrt(np.mean(velocity_error_original**2))
+rmse_model_based = np.sqrt(np.mean(velocity_error_model_based**2))
+rmse_mpc = np.sqrt(np.mean(velocity_error_mpc**2))
 
 print("\nCAV Velocity Tracking Error Relative to Leading Vehicle:")
-print("-" * 60)
-print(f"{'Metric':<30} {'New Controller':<15} {'Original Controller':<15}")
-print("-" * 60)
-print(f"{'Mean Absolute Error (m/s)':<30} {mean_error_new:<15.4f} {mean_error_original:<15.4f}")
-print(f"{'Maximum Absolute Error (m/s)':<30} {max_error_new:<15.4f} {max_error_original:<15.4f}")
-print(f"{'RMSE (m/s)':<30} {rmse_new:<15.4f} {rmse_original:<15.4f}")
-print(f"{'Sum of Squared Errors':<30} {np.sum(velocity_error_new**2):<15.4f} {np.sum(velocity_error_original**2):<15.4f}")
-print("-" * 60)
+print("-" * 125)
+print(f"{'Metric':<30} {'New':<12} {'Original':<12} {'LCC (model-based)':<20} {'MPC (model-based)':<20}")
+print("-" * 125)
+print(f"{'Mean Absolute Error (m/s)':<30} {mean_error_new:<12.4f} {mean_error_original:<12.4f} {mean_error_model_based:<20.4f} {mean_error_mpc:<20.4f}")
+print(f"{'Maximum Absolute Error (m/s)':<30} {max_error_new:<12.4f} {max_error_original:<12.4f} {max_error_model_based:<20.4f} {max_error_mpc:<20.4f}")
+print(f"{'RMSE (m/s)':<30} {rmse_new:<12.4f} {rmse_original:<12.4f} {rmse_model_based:<20.4f} {rmse_mpc:<20.4f}")
+print(f"{'Sum of Squared Errors':<30} {np.sum(velocity_error_new**2):<12.4f} {np.sum(velocity_error_original**2):<12.4f} {np.sum(velocity_error_model_based**2):<20.4f} {np.sum(velocity_error_mpc**2):<20.4f}")
+print("-" * 125)
 
 # Calculate tracking error sum for all vehicles
 all_vehicles_error_new = 0
 all_vehicles_error_original = 0
+all_vehicles_error_model_based = 0
+all_vehicles_error_mpc = 0
 leading_vel = trajectories[:, 0, 1]  # Leading vehicle velocity
 
 print("\nVelocity Tracking Error Summary for All Vehicles:")
-print("-" * 75)
-print(f"{'Vehicle':<10} {'New Controller RMSE':<20} {'Original Controller RMSE':<25} {'Improvement (%)':<20}")
-print("-" * 75)
+print("-" * 115)
+print(f"{'Vehicle':<10} {'New RMSE':<12} {'Original RMSE':<14} {'LCC RMSE':<12} {'MPC RMSE':<12}")
+print("-" * 115)
 
 for i in range(1, num_vehicles):  # Skip the leading vehicle (i=0)
-    # Calculate velocity errors for each vehicle
     vel_error_new = trajectories[:, i, 1] - leading_vel
     vel_error_original = trajectories_original[:, i, 1] - leading_vel
-    
-    # Root Mean Square Error
+    vel_error_model_based = trajectories_model_based[:, i, 1] - leading_vel
+    vel_error_mpc = trajectories_mpc[:, i, 1] - leading_vel
     rmse_new = np.sqrt(np.mean(vel_error_new**2))
     rmse_original = np.sqrt(np.mean(vel_error_original**2))
-    
-    # Calculate improvement percentage
-    if rmse_original > 0:
-        improvement = ((rmse_original - rmse_new) / rmse_original) * 100
-    else:
-        improvement = 0
-    
-    # Print vehicle-specific errors
+    rmse_model_based = np.sqrt(np.mean(vel_error_model_based**2))
+    rmse_mpc = np.sqrt(np.mean(vel_error_mpc**2))
     vehicle_type = "CAV" if i in cav_indices else f"HDV{i-1}"
-    print(f"{vehicle_type:<10} {rmse_new:<20.4f} {rmse_original:<25.4f} {improvement:<20.2f}")
-    
-    # Add to total
+    print(f"{vehicle_type:<10} {rmse_new:<12.4f} {rmse_original:<14.4f} {rmse_model_based:<12.4f} {rmse_mpc:<12.4f}")
     all_vehicles_error_new += rmse_new
     all_vehicles_error_original += rmse_original
+    all_vehicles_error_model_based += rmse_model_based
+    all_vehicles_error_mpc += rmse_mpc
 
-# Calculate total improvement percentage
-if all_vehicles_error_original > 0:
-    total_improvement = ((all_vehicles_error_original - all_vehicles_error_new) / all_vehicles_error_original) * 100
-else:
-    total_improvement = 0
+print("-" * 115)
+print(f"{'Total':<10} {all_vehicles_error_new:<12.4f} {all_vehicles_error_original:<14.4f} {all_vehicles_error_model_based:<12.4f} {all_vehicles_error_mpc:<12.4f}")
+print("-" * 115)
 
-print("-" * 75)
-print(f"{'Total':<10} {all_vehicles_error_new:<20.4f} {all_vehicles_error_original:<25.4f} {total_improvement:<20.2f}")
-print("-" * 75)
+# --- Velocity Gain Calculation (L2 sense) ---
+print("\nVelocity Gain $G_{v,i}$ in the $\\mathcal{{L}}_2$ sense:")
+print("-" * 95)
+print(f"{'Vehicle':<10} {'New':<12} {'Original':<12} {'LCC':<12} {'MPC':<12}")
+print("-" * 95)
+for i in range(1, num_vehicles):
+    den_new = np.linalg.norm(np.max(trajectories[:, i-1, 1]))
+    gain_new = np.linalg.norm(np.max(trajectories[:, i, 1])) / den_new if den_new > 0 else np.nan
+    den_orig = np.linalg.norm(np.max(trajectories_original[:, i-1, 1]))
+    gain_orig = np.linalg.norm(np.max(trajectories_original[:, i, 1])) / den_orig if den_orig > 0 else np.nan
+    den_mb = np.linalg.norm(np.max(trajectories_model_based[:, i-1, 1]))
+    gain_model_based = np.linalg.norm(np.max(trajectories_model_based[:, i, 1])) / den_mb if den_mb > 0 else np.nan
+    den_mpc = np.linalg.norm(np.max(trajectories_mpc[:, i-1, 1]))
+    gain_mpc = np.linalg.norm(np.max(trajectories_mpc[:, i, 1])) / den_mpc if den_mpc > 0 else np.nan
+    vehicle_type = f"CAV{i}" if i in cav_indices else f"HDV{i-1}"
+    print(f"{vehicle_type:<10} {gain_new:<12.4f} {gain_orig:<12.4f} {gain_model_based:<12.4f} {gain_mpc:<12.4f}")
+print("-" * 95)
+
+# --- Spacing Gain Calculation (L2 sense) ---
+print("\nSpacing Gain $G_{s,i}$ in the $\\mathcal{{L}}_2$ sense:")
+print("-" * 95)
+print(f"{'Vehicle':<10} {'New':<12} {'Original':<12} {'LCC':<12} {'MPC':<12}")
+print("-" * 95)
+for i in range(1, num_vehicles):
+    den_new = np.linalg.norm(np.max(np.abs(trajectories[:, i-1, 0])))
+    gain_new = np.linalg.norm(np.max(np.abs(trajectories[:, i, 0]))) / den_new if den_new > 0 else np.nan
+    den_orig = np.linalg.norm(np.max(np.abs(trajectories_original[:, i-1, 0])))
+    gain_orig = np.linalg.norm(np.max(np.abs(trajectories_original[:, i, 0]))) / den_orig if den_orig > 0 else np.nan
+    den_mb = np.linalg.norm(np.max(np.abs(trajectories_model_based[:, i-1, 0])))
+    gain_model_based = np.linalg.norm(np.max(np.abs(trajectories_model_based[:, i, 0]))) / den_mb if den_mb > 0 else np.nan
+    den_mpc = np.linalg.norm(np.max(np.abs(trajectories_mpc[:, i-1, 0])))
+    gain_mpc = np.linalg.norm(np.max(np.abs(trajectories_mpc[:, i, 0]))) / den_mpc if den_mpc > 0 else np.nan
+    vehicle_type = f"CAV{i}" if i in cav_indices else f"HDV{i-1}"
+    print(f"{vehicle_type:<10} {gain_new:<12.4f} {gain_orig:<12.4f} {gain_model_based:<12.4f} {gain_mpc:<12.4f}")
+print("-" * 95)
+
+# --- Combined (normalized velocity & spacing) Gain ---
+# 归一化: s_norm = s / s_ref, v_norm = v / v_ref; 联合量 = max_t sqrt(s_norm^2 + v_norm^2), gain = 当前车/前车
+s_ref = dynamics_params.get('desired_spacing', 20.0)
+v_ref = 15.0
+def _combined_norm(traj, veh_idx, s_ref, v_ref):
+    s = traj[:, veh_idx, 0] / s_ref
+    v = traj[:, veh_idx, 1] / v_ref
+    return np.max(np.sqrt(s**2 + v**2))
+
+print("\nCombined Gain $G_{sv,i}$ (normalized spacing & velocity):")
+print("-" * 95)
+print(f"{'Vehicle':<10} {'New':<12} {'Original':<12} {'LCC':<12} {'MPC':<12}")
+print("-" * 95)
+for i in range(1, num_vehicles):
+    den_new = _combined_norm(trajectories, i - 1, s_ref, v_ref)
+    gain_new = _combined_norm(trajectories, i, s_ref, v_ref) / den_new if den_new > 0 else np.nan
+    den_orig = _combined_norm(trajectories_original, i - 1, s_ref, v_ref)
+    gain_orig = _combined_norm(trajectories_original, i, s_ref, v_ref) / den_orig if den_orig > 0 else np.nan
+    den_mb = _combined_norm(trajectories_model_based, i - 1, s_ref, v_ref)
+    gain_model_based = _combined_norm(trajectories_model_based, i, s_ref, v_ref) / den_mb if den_mb > 0 else np.nan
+    den_mpc = _combined_norm(trajectories_mpc, i - 1, s_ref, v_ref)
+    gain_mpc = _combined_norm(trajectories_mpc, i, s_ref, v_ref) / den_mpc if den_mpc > 0 else np.nan
+    vehicle_type = f"CAV{i}" if i in cav_indices else f"HDV{i-1}"
+    print(f"{vehicle_type:<10} {gain_new:<12.4f} {gain_orig:<12.4f} {gain_model_based:<12.4f} {gain_mpc:<12.4f}")
+print("-" * 95)
 
 
 

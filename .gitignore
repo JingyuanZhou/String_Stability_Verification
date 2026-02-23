@@ -10,4 +10,4 @@ venv/
 .env
 
 # VS Code settings
-.vscode/
+.vscode/*.ckpt
