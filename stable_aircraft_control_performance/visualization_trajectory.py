@@ -25,12 +25,12 @@ dynamics_params = {
 # Set global plotting style
 #plt.style.use('seaborn-white')
 plt.rcParams["font.family"] = "Times New Roman"
-plt.rcParams['font.size'] = 12
-plt.rcParams['axes.labelsize'] = 14
-plt.rcParams['axes.titlesize'] = 16
-plt.rcParams['xtick.labelsize'] = 12
-plt.rcParams['ytick.labelsize'] = 12
-plt.rcParams['legend.fontsize'] = 12
+plt.rcParams['font.size'] = 24  # 设置默认字体大小
+plt.rcParams['axes.labelsize'] = 24  # 坐标轴标签字体大小
+plt.rcParams['axes.titlesize'] = 24  # 标题字体大小
+plt.rcParams['xtick.labelsize'] = 24  # x轴刻度字体大小
+plt.rcParams['ytick.labelsize'] = 24  # y轴刻度字体大小
+plt.rcParams['legend.fontsize'] = 24  # 图例字体大小
 
 # Create connection matrix (influence of preceding UAV on follower)
 connection_matrix = {i: {} for i in range(num_uavs)}
@@ -419,9 +419,9 @@ except Exception as e:
 fig = plt.figure(figsize=(10, 8), dpi=300)
 contour1 = plt.contourf(X, Y, Z1, cmap='viridis', levels=20, alpha=0.95)
 plt.plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-plt.xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
-plt.ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
-plt.title('Lyapunov Function (UAV 1)', fontsize=16)
+plt.xlabel('Position Error (m)', fontsize=24, labelpad=10)
+plt.ylabel('Velocity Error (m/s)', fontsize=24, labelpad=10)
+#plt.title('Lyapunov Function (UAV 1)', fontsize=24)
 plt.colorbar(contour1, label='Lyapunov Value')
 plt.legend()
 plt.grid(True)
@@ -431,11 +431,11 @@ plt.close()
 
 # Second follower individual plot
 fig = plt.figure(figsize=(10, 8), dpi=300)
-contour2 = plt.contourf(X, Y, Z2, cmap='plasma', levels=20, alpha=0.95)
+contour2 = plt.contourf(X, Y, Z2, cmap='viridis', levels=20, alpha=0.95)
 plt.plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-plt.xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
-plt.ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
-plt.title('Lyapunov Function (UAV 2)', fontsize=16)
+plt.xlabel('Position Error (m)', fontsize=24, labelpad=10)
+plt.ylabel('Velocity Error (m/s)', fontsize=24, labelpad=10)
+#plt.title('Lyapunov Function (UAV 2)', fontsize=24)
 plt.colorbar(contour2, label='Lyapunov Value')
 plt.legend()
 plt.grid(True)
@@ -449,9 +449,9 @@ fig, axes = plt.subplots(1, 2, figsize=(16, 8), dpi=300)
 # Follower 1 contour
 contour1 = axes[0].contourf(X, Y, Z1, cmap='viridis', levels=20, alpha=0.95)
 axes[0].plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-axes[0].set_xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
-axes[0].set_ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
-axes[0].set_title('Lyapunov Function (UAV 1)', fontsize=16)
+axes[0].set_xlabel('Position Error (m)', fontsize=24, labelpad=10)
+axes[0].set_ylabel('Velocity Error (m/s)', fontsize=24, labelpad=10)
+#axes[0].set_title('Lyapunov Function (UAV 1)', fontsize=24)
 plt.colorbar(contour1, ax=axes[0], label='Lyapunov Value')
 axes[0].legend()
 axes[0].grid(True)
@@ -459,9 +459,9 @@ axes[0].grid(True)
 # Follower 2 contour
 contour2 = axes[1].contourf(X, Y, Z2, cmap='plasma', levels=20, alpha=0.95)
 axes[1].plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-axes[1].set_xlabel('X-Position Error (m)', fontsize=14, labelpad=10)
-axes[1].set_ylabel('X-Velocity Error (m/s)', fontsize=14, labelpad=10)
-axes[1].set_title('Lyapunov Function (UAV 2)', fontsize=16)
+axes[1].set_xlabel('Position Error (m)', fontsize=24, labelpad=10)
+axes[1].set_ylabel('Velocity Error (m/s)', fontsize=24, labelpad=10)
+#axes[1].set_title('Lyapunov Function (UAV 2)', fontsize=24)
 plt.colorbar(contour2, ax=axes[1], label='Lyapunov Value')
 axes[1].legend()
 axes[1].grid(True)
