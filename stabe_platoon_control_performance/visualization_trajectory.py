@@ -370,9 +370,9 @@ for vehicle_idx in range(2):#num_vehicles-1
     ax.set_ylabel('Velocity (m/s)', fontsize=24, labelpad=10)
     ax.tick_params(axis='both', labelsize=24)
     cbar = plt.colorbar(contour, ax=ax, format=mtick.FormatStrFormatter('%.1e'))
-    cbar.ax.tick_params(labelsize=20)
+    cbar.ax.tick_params(labelsize=24)
     cbar.set_label('Lyapunov Function', fontsize=24)
-    plt.legend(fontsize=14, frameon=True, fancybox=True, framealpha=0.8)
+    plt.legend(fontsize=24, frameon=True, fancybox=True, framealpha=0.8)
     plt.tight_layout()
     
     if vehicle_idx == 0:
