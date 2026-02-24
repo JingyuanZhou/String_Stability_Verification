@@ -416,7 +416,7 @@ except Exception as e:
 
 # 2D contour plots
 # First follower individual plot
-fig = plt.figure(figsize=(10, 8), dpi=300)
+fig = plt.figure(figsize=(8, 6), dpi=300)
 contour1 = plt.contourf(X, Y, Z1, cmap='viridis', levels=20, alpha=0.95)
 plt.plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
 plt.xlabel('Position Error (m)', fontsize=24, labelpad=10)
@@ -430,7 +430,7 @@ plt.savefig('output_figures/uav1_lyapunov_2d.pdf', format='pdf', bbox_inches='ti
 plt.close()
 
 # Second follower individual plot
-fig = plt.figure(figsize=(10, 8), dpi=300)
+fig = plt.figure(figsize=(8, 6), dpi=300)
 contour2 = plt.contourf(X, Y, Z2, cmap='viridis', levels=20, alpha=0.95)
 plt.plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
 plt.xlabel('Position Error (m)', fontsize=24, labelpad=10)
