@@ -16,6 +16,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 check_point = torch.load('model_weights/best_microgrid_model-v21.ckpt') #model_weights/best_microgrid_model-v19.ckpt best_microgrid_model_ISS-v1.ckpt
 parameters = check_point['state_dict']
 
+plt.rcParams["font.family"] = "Times New Roman"
+plt.rcParams['font.size'] = 24  # 设置默认字体大小
+plt.rcParams['axes.labelsize'] = 24  # 坐标轴标签字体大小
+plt.rcParams['axes.titlesize'] = 24  # 标题字体大小
+plt.rcParams['xtick.labelsize'] = 24  # x轴刻度字体大小
+plt.rcParams['ytick.labelsize'] = 24  # y轴刻度字体大小
+plt.rcParams['legend.fontsize'] = 24  # 图例字体大小
+
 # Extract controller parameters for the CombinedController
 controller_parameters = {}
 original_controller_parameters = {}
@@ -174,21 +182,21 @@ except Exception as e:
 
 # Create separate 2D contour plots for each inverter
 for inv_idx in range(num_inverters):
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(8, 6))
     contour = plt.contourf(omega_mesh, delta_mesh, v_values[inv_idx].T, 
                           levels=20, cmap=cm.viridis)
-    plt.xlabel('Frequency Error (rad/s)')
-    plt.ylabel('Controller State (rad)')
-    plt.title(f'Inverter {inv_idx+1} Lyapunov Function')
-    plt.grid(True)
+    plt.xlabel('Frequency Error (rad/s)', fontsize=24, labelpad=10)
+    plt.ylabel('Controller State (rad)', fontsize=24, labelpad=10)
+    #plt.title(f'Inverter {inv_idx+1} Lyapunov Function')
+    plt.grid(False)
     plt.colorbar(contour, label='Lyapunov Value')
     
     # Mark the equilibrium point
-    plt.plot(0, 0, 'r*', markersize=10, label='Equilibrium')
+    plt.plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
     plt.legend()
 
     plt.tight_layout()
-    plt.savefig(f'output_figures/microgrid_lyapunov_function_inverter{inv_idx+1}_2d.png', dpi=300)
+    plt.savefig(f'output_figures/microgrid_lyapunov_function_inverter{inv_idx+1}_2d.pdf', format='pdf', bbox_inches='tight', dpi=300)
     plt.close(fig)
 
 
