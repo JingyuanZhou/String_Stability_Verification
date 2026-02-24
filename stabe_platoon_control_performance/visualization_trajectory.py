@@ -365,9 +365,9 @@ for vehicle_idx in range(2):#num_vehicles-1
     # 2D等高线图
     fig3, ax = plt.subplots(figsize=(8, 6), dpi=300)
     contour = ax.contourf(X, Y, Z, cmap='viridis', levels=20, alpha=0.95)
-    ax.plot(20, 15, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-    ax.set_xlabel('Spacing (m)', fontsize=24, labelpad=10)
-    ax.set_ylabel('Velocity (m/s)', fontsize=24, labelpad=10)
+    ax.plot(20, 15, 'r*', markersize=14, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
+    ax.set_xlabel('Spacing (m)', fontsize=26, labelpad=10)
+    ax.set_ylabel('Velocity (m/s)', fontsize=26, labelpad=10)
     ax.tick_params(axis='both', labelsize=24)
     cbar = plt.colorbar(contour, ax=ax, format=mtick.FormatStrFormatter('%.1e'))
     cbar.ax.tick_params(labelsize=24)

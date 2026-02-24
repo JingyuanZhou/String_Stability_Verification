@@ -185,15 +185,16 @@ for inv_idx in range(num_inverters):
     fig = plt.figure(figsize=(8, 6))
     contour = plt.contourf(omega_mesh, delta_mesh, v_values[inv_idx].T, 
                           levels=20, cmap=cm.viridis)
-    plt.xlabel('Frequency Error (rad/s)', fontsize=24, labelpad=10)
-    plt.ylabel('Controller State (rad)', fontsize=24, labelpad=10)
+    plt.xlabel('Frequency Error (rad/s)', fontsize=26, labelpad=10)
+    plt.ylabel('Controller State (rad)', fontsize=26, labelpad=10)
+    plt.tick_params(axis='both', which='major', labelsize=24)
     #plt.title(f'Inverter {inv_idx+1} Lyapunov Function')
     plt.grid(False)
     plt.colorbar(contour, label='Lyapunov Value')
     
     # Mark the equilibrium point
     plt.plot(0, 0, 'r*', markersize=12, label='Equilibrium', markeredgecolor='white', markeredgewidth=1)
-    plt.legend()
+    plt.legend(fontsize=24, frameon=True, fancybox=True, framealpha=0.8)
 
     plt.tight_layout()
     plt.savefig(f'output_figures/microgrid_lyapunov_function_inverter{inv_idx+1}_2d.pdf', format='pdf', bbox_inches='tight', dpi=300)
