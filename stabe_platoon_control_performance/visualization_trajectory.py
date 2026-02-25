@@ -171,8 +171,8 @@ disturbances = torch.zeros((batch_size, num_vehicles_sim)).to(device)
 with torch.no_grad():
     for t in range(time_steps):
         # 领头车扰动：从最高点 10 按 sin 曲线下降至 0（前 15 步）
-        if t <= 15:
-            disturbances[:, 0] = 7 * torch.sin(torch.tensor(2 * np.pi * t / 15))
+        if t <= 30:
+            disturbances[:, 0] = 4 * torch.sin(torch.tensor(2 * np.pi * t / 30))
 
         # 计算控制输入：每个 CAV 使用「前车+本车+后 3 车」共 5 车状态 (state_dim=10)
         controls = []
